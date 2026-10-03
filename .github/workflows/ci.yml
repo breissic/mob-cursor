@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            spacetimedb/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: spacetimedb
+      - uses: ./.github/actions/setup-spacetime
+
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Build module
+        run: spacetime build --module-path spacetimedb
+      - name: Build client
+        run: npm run build
+
+      - name: Generated bindings are up to date
+        run: |
+          spacetime generate --lang typescript --out-dir src/module_bindings --module-path spacetimedb --no-config -y
+          if [ -n "$(git status --porcelain -- src/module_bindings)" ]; then
+            git status --porcelain -- src/module_bindings
+            git diff -- src/module_bindings | head -100
+            echo "::error::src/module_bindings is stale. Run 'npm run spacetime:generate' and commit."
+            exit 1
+          fi

@@ -36,3 +36,4 @@ Small decisions made while building, newest at the bottom of each section.
 
 ## Fun layer
 - **Procedures can make HTTP calls** (`ctx.http.fetch`, beta), so the commentator could live inside the module. I kept it as a separate `worker/`, per the brief. That keeps the API key off the database host and makes it easy to kill.
+- **CI publishes with `--yes=remote,migrate`**, not bare `--yes`. Bare `--yes` means `all`, which also auto-accepts break-clients and delete-data prompts.

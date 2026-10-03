@@ -16,7 +16,8 @@
     "spacetime:build": "spacetime build --module-path spacetimedb",
     "spacetime:publish:local": "spacetime publish mob-cursor --module-path spacetimedb --server local -y",
     "spacetime:publish": "spacetime publish mob-cursor-9xp0y --module-path spacetimedb --server maincloud",
-    "test": "tsx --test spacetimedb/test/*.test.ts"
+    "test": "tsx --test spacetimedb/test/*.test.ts",
+    "lint": "eslint ."
   },
   "dependencies": {
     "qrcode": "1.5.4",
@@ -25,12 +26,17 @@
     "spacetimedb": "2.10.2"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
     "@types/qrcode": "1.5.5",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "5.2.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "16.5.0",
     "tsx": "4.20.6",
     "typescript": "5.6.3",
+    "typescript-eslint": "8.71.0",
     "vite": "7.3.6"
   }
 }

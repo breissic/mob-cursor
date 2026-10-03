@@ -1,0 +1,55 @@
+name: Publish module
+
+# Publishes the SpacetimeDB module to Maincloud on pushes to main that touch it.
+# Never clears data: no --delete-data / -c anywhere in this file. A breaking
+# schema change makes the publish fail, which is what we want.
+#
+# Manual runs (Actions tab -> "Run workflow") default to the throwaway database
+# mob-cursor-ci-test, which is how token auth was verified before trusting it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spacetimedb/**'
+      - '.github/workflows/publish-module.yml'
+  workflow_dispatch:
+    inputs:
+      database:
+        description: Database name to publish to
+        default: mob-cursor-ci-test
+        required: true
+
+concurrency:
+  group: publish-module
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE: ${{ github.event_name == 'workflow_dispatch' && inputs.database || 'mob-cursor-live' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: spacetimedb/package-lock.json
+      - run: npm ci
+        working-directory: spacetimedb
+      - uses: ./.github/actions/setup-spacetime
+
+      - name: Log in with repo secret
+        env:
+          SPACETIMEDB_TOKEN: ${{ secrets.SPACETIMEDB_TOKEN }}
+        run: |
+          if [ -z "$SPACETIMEDB_TOKEN" ]; then echo "::error::SPACETIMEDB_TOKEN secret is not set"; exit 1; fi
+          spacetime login --token "$SPACETIMEDB_TOKEN" > /dev/null
+          spacetime login show | grep -v -i token
+
+      - name: Publish ${{ env.DATABASE }}
+        run: |
+          # Only auto-confirm "publish to remote" and plain migrations. Breaking-client
+          # or data-deleting changes are NOT auto-confirmed, so they fail here.
+          spacetime publish "$DATABASE" --no-config --server maincloud --module-path spacetimedb --yes=remote,migrate

@@ -1,0 +1,17 @@
+name: Setup SpacetimeDB CLI
+description: Install the SpacetimeDB CLI pinned to the project version.
+inputs:
+  version:
+    description: CLI version
+    default: '2.10.2'
+runs:
+  using: composite
+  steps:
+    - name: Install spacetime CLI ${{ inputs.version }}
+      shell: bash
+      run: |
+        curl -sSf https://install.spacetimedb.com | sh -s -- --yes
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
+        spacetime version install "${{ inputs.version }}" --use --yes
+        spacetime --version
