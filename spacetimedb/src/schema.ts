@@ -201,6 +201,18 @@ export const session = table(
   }
 );
 
+/**
+ * set_pointer rate limiter state (GCRA): the theoretical arrival time of the next
+ * call. Lets network-bunched packets through instead of dropping the newest one.
+ */
+export const pointerRate = table(
+  {},
+  {
+    identity: t.identity().primaryKey(),
+    tatUs: t.u64(),
+  }
+);
+
 /** Kicked identities and when they may rejoin. */
 export const banned = table(
   {},
@@ -278,6 +290,7 @@ const spacetimedb = schema({
   admin,
   adminSecret,
   session,
+  pointerRate,
   banned,
   clickVote,
   playerStats,

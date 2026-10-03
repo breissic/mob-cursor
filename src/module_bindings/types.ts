@@ -187,6 +187,12 @@ export const Pointer = __t.object("Pointer", {
 });
 export type Pointer = __Infer<typeof Pointer>;
 
+export const PointerRate = __t.object("PointerRate", {
+  identity: __t.identity(),
+  tatUs: __t.u64(),
+});
+export type PointerRate = __Infer<typeof PointerRate>;
+
 export const Session = __t.object("Session", {
   connectionId: __t.connectionId(),
   identity: __t.identity(),

@@ -4,10 +4,14 @@ import {
   aggregate,
   capWeights,
   chaos,
+  cursorPhysics,
   geometricMedian,
+  ghostKey,
   integrate,
   makeMaze,
   makeMines,
+  packGhosts,
+  unpackGhosts,
   revealCell,
   sha256Hex,
   targetPos,
@@ -131,6 +135,28 @@ test('stage specs get harder', () => {
   assert.ok(STAGE_SPECS.maze[2].cw > STAGE_SPECS.maze[0].cw);
 });
 
+test('ghost frame round-trips and rejects unknown formats', () => {
+  const gs = [
+    { key: 0xbeef, color: 3, team: 1, dictator: true, x: 0, y: 1 },
+    { key: 7, color: 11, team: 0, dictator: false, x: 0.5, y: 0.25 },
+  ];
+  const back = unpackGhosts(packGhosts(gs));
+  assert.equal(back.length, 2);
+  assert.deepEqual({ ...back[0], x: 0, y: 1 }, gs[0]);
+  assert.equal(back[0].y, 1);
+  assert.ok(Math.abs(back[1].x - 0.5) < 1 / 255 && Math.abs(back[1].y - 0.25) < 1 / 255);
+  assert.deepEqual(unpackGhosts(new Uint8Array([3, 1, 0, 128, 128])), []); // old 4-byte format
+  assert.deepEqual(unpackGhosts(new Uint8Array(0)), []);
+});
+
+test('ghost keys are stable and spread out', () => {
+  const ids = Array.from({ length: 200 }, (_, i) => `c200${(i * 2654435761 >>> 0).toString(16).padStart(60, '0')}`);
+  assert.equal(ghostKey(ids[0]), ghostKey(ids[0]));
+  const keys = new Set(ids.map(ghostKey));
+  assert.ok(keys.size >= 198, `only ${keys.size} distinct keys for 200 ids`);
+  for (const k of keys) assert.ok(k >= 0 && k <= 0xffff);
+});
+
 test('vote: cards fit the field, start spot is outside every card', () => {
   const cards = voteLayout(['targets', 'maze', 'minesweeper']);
   for (const c of cards) {
@@ -146,4 +172,12 @@ test('vote: hovered card wins, otherwise the nearest', () => {
   assert.equal(voteWinner(cards, 0.1, 8.9).kind, 'targets');
   assert.equal(voteWinner(cards, 15.9, 0.1).kind, 'minesweeper');
   assert.equal(voteWinner(cards, VOTE_START.x, VOTE_START.y).kind, 'maze');
+});
+
+test('vote rounds run a stronger spring, everything else the config spring', () => {
+  const cfg = { gain: 40, damping: 12, maxSpeed: 20 };
+  assert.deepEqual(cursorPhysics('maze', cfg), cfg);
+  assert.deepEqual(cursorPhysics(undefined, cfg), cfg);
+  const v = cursorPhysics('vote', cfg);
+  assert.ok(v.gain > cfg.gain && v.damping > cfg.damping && v.maxSpeed > cfg.maxSpeed);
 });
