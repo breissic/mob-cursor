@@ -409,7 +409,7 @@ export function startRenderer(
       g.strokeRect(hc * cw, hr * chh, cw, chh);
       g.fillStyle = '#fff';
       g.font = `bold 0.4px system-ui`;
-      g.fillText(`LIVES ${'❤️'.repeat(Math.max(0, pr.lives))}`, 0.2, -0.15);
+      g.fillText(`LIVES ${pr.lives}/${m.lives}`, 0.2, -0.15);
     }
   }
 

@@ -15,7 +15,8 @@
     "spacetime:generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path spacetimedb -y",
     "spacetime:build": "spacetime build --module-path spacetimedb",
     "spacetime:publish:local": "spacetime publish mob-cursor --module-path spacetimedb --server local -y",
-    "spacetime:publish": "spacetime publish mob-cursor-9xp0y --module-path spacetimedb --server maincloud"
+    "spacetime:publish": "spacetime publish mob-cursor-9xp0y --module-path spacetimedb --server maincloud",
+    "test": "tsx --test spacetimedb/test/*.test.ts"
   },
   "dependencies": {
     "qrcode": "1.5.4",

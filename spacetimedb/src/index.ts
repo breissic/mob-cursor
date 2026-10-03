@@ -83,7 +83,7 @@ function fx(ctx: Ctx, kind: string, x: number, y: number, who = '') {
 }
 
 function isAdmin(ctx: Ctx) {
-  return ctx.db.admin.identity.find(ctx.sender) !== undefined;
+  return ctx.db.admin.identity.find(ctx.sender) != null;
 }
 
 function requireAdmin(ctx: Ctx) {
