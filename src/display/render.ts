@@ -3,6 +3,7 @@ import { WORLD_H, WORLD_W, type MinesProgress } from '../../spacetimedb/src/sim'
 import { drawCursorSprite, drawField, drawFuse, drawLevel, fieldColor, nameTag, parseLevel, worldText, type LevelView } from '../game/draw';
 import { blit } from '../game/sprites';
 import { serverNowMs } from '../lib/clock';
+import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
 import { sfx } from './audio';
 
 // Canvas renderer for the projector view. Runs in requestAnimationFrame and
@@ -48,8 +49,9 @@ export function startRenderer(
   let shake = 0;
   let flash = 0;
   let flashColor = '255,59,59';
-  const rc = { x: WORLD_W / 2, y: WORLD_H / 2, init: false };
-  let snap = { x: WORLD_W / 2, y: WORLD_H / 2, vx: 0, vy: 0, at: performance.now() };
+  // Predicted render position of the shared cursor.
+  const smoother = createCursorSmoother();
+  let rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
 
   const playerOf = (hex: string) => {
     for (const p of conn.db.player.iter()) if (p.identity.toHexString() === hex) return p;
@@ -62,9 +64,9 @@ export function startRenderer(
     if (gh) gh.seen = performance.now();
   };
   const onPointerUpdate = (c: unknown, _o: unknown, n: { identity: { toHexString(): string } }) => onPointer(c, n);
-  const onCursor = (_c: unknown, _o: unknown, row: { x: number; y: number; vx: number; vy: number }) => {
+  const onCursor = (_c: unknown, _o: unknown, row: Parameters<typeof smoother.push>[0]) => {
     counters.ticks++;
-    snap = { x: row.x, y: row.y, vx: row.vx, vy: row.vy, at: performance.now() };
+    smoother.push(row);
   };
   const onFx = (_c: unknown, row: { kind: string; x: number; y: number; who: string }) => {
     sfx(row.kind);
@@ -210,21 +212,10 @@ export function startRenderer(
       }
     }
 
-    // Cursor interpolation: extrapolate the latest snapshot, then ease toward it.
+    // Cursor prediction: run the server's spring forward from the last tick.
     const cur = conn.db.cursor.id.find(0);
-    if (cur) {
-      const age = Math.min(0.15, (t - snap.at) / 1000);
-      const ex = snap.x + snap.vx * age;
-      const ey = snap.y + snap.vy * age;
-      if (!rc.init || Math.hypot(ex - rc.x, ey - rc.y) > 3) {
-        rc.x = ex;
-        rc.y = ey;
-        rc.init = true;
-      }
-      const k = 1 - Math.exp(-dt * 18);
-      rc.x += (ex - rc.x) * k;
-      rc.y += (ey - rc.y) * k;
-    }
+    const cfg = conn.db.config.id.find(0);
+    if (cur && cfg) rc = smoother.step(dt, cfg, running ? cursorHoldUntilMs(running.view) : 0);
 
     if (running) drawLevel(g, running.view, px, serverMs, rc);
 
@@ -242,7 +233,8 @@ export function startRenderer(
         gh = { x: wx, y: wy, seen: nowMs };
         ghosts.set(id, gh);
       }
-      const k = 1 - Math.exp(-dt * 12);
+      // Pointers now arrive at up to 15 Hz, so ghosts can follow faster.
+      const k = 1 - Math.exp(-dt * 20);
       gh.x += (wx - gh.x) * k;
       gh.y += (wy - gh.y) * k;
       fresh.add(id);

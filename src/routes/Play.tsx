@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { tables, type DbConnection } from '../module_bindings';
 import { useConnState, usePoll, useRows } from '../lib/stdb';
 import { observeClock, serverNowMs } from '../lib/clock';
+import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
 import { COLORS, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
 import { drawField, drawLevel, GAME_META, parseLevel, type LevelView } from '../game/draw';
 import { blit, spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
 
 const NAME_KEY = 'mob-cursor/name';
-const DEADBAND = 0.01; // 1% of the pad
+const DEADBAND = 0.004; // 0.4% of the pad
 const HEARTBEAT_MS = 1000;
 const SILLY = ['Clicky McClick', 'Sir Hovers', 'Mouse Potato', 'Captain Drag', 'Lord Scroll', 'Doubleclick Dan', 'Cursed Cursor', 'Pixel Pete', 'Hover Hannah', 'Right-Click Rita', 'Tab Goblin', 'Ctrl Freak'];
 
@@ -108,33 +109,45 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
   const tapRings = useRef<{ x: number; y: number; t: number }[]>([]);
   const [sent, setSent] = useState(0);
 
+  // Called on every finger move; the sender effect swaps in the real pump.
+  const pump = useRef<() => void>(() => {});
+
   // Throttled sender: obeys config.pointerHzEffective live, dead-band + heartbeat.
+  // Leading edge: a move sends at once if a full interval has passed, otherwise a
+  // trailing send is armed for the end of the interval so the last position lands.
   useEffect(() => {
     let lastSent: { x: number; y: number } | null = null;
-    let lastAt = 0;
+    let lastAt = -Infinity;
     let timer = 0;
     let count = 0;
-    const loop = () => {
-      const hz = conn.db.config.id.find(0)?.pointerHzEffective ?? 8;
-      const f = finger.current;
-      const now = performance.now();
-      if (f && document.visibilityState === 'visible') {
-        const moved = !lastSent || Math.hypot(f.x - lastSent.x, f.y - lastSent.y) > DEADBAND;
-        if (moved || now - lastAt > HEARTBEAT_MS) {
-          conn.reducers.setPointer({ x: f.x, y: f.y }).catch(() => {});
-          lastSent = { ...f };
-          lastAt = now;
-          count++;
-        }
-      }
-      timer = window.setTimeout(loop, 1000 / Math.max(1, hz));
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = window.setTimeout(run, ms);
     };
-    loop();
+    const run = () => {
+      const f = finger.current;
+      if (!f || document.visibilityState !== 'visible') return;
+      const hz = conn.db.config.id.find(0)?.pointerHzEffective ?? 15;
+      const now = performance.now();
+      const moved = !lastSent || Math.hypot(f.x - lastSent.x, f.y - lastSent.y) > DEADBAND;
+      if (!moved && now - lastAt < HEARTBEAT_MS) return arm(lastAt + HEARTBEAT_MS - now);
+      const wait = lastAt + 1000 / Math.max(1, hz) - now;
+      if (wait > 0) return arm(wait);
+      conn.reducers.setPointer({ x: f.x, y: f.y }).catch(() => {});
+      lastSent = { ...f };
+      lastAt = now;
+      count++;
+      arm(HEARTBEAT_MS);
+    };
+    pump.current = run;
+    document.addEventListener('visibilitychange', run);
     const stat = window.setInterval(() => {
       setSent(count);
       count = 0;
     }, 1000);
     return () => {
+      pump.current = () => {};
+      document.removeEventListener('visibilitychange', run);
       clearTimeout(timer);
       clearInterval(stat);
     };
@@ -161,9 +174,15 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
     const g = cv.getContext('2d')!;
     let raf = 0;
     let cache: { id: bigint; params: string; progress: string; view: LevelView } | null = null;
-    const rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
-    const draw = () => {
+    const smoother = createCursorSmoother();
+    const onCursor = (_c: unknown, _o: unknown, row: Parameters<typeof smoother.push>[0]) => smoother.push(row);
+    conn.db.cursor.onUpdate(onCursor);
+    let rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
+    let last = performance.now();
+    const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
       const dpr = window.devicePixelRatio || 1;
       if (cv.width !== Math.round(cv.clientWidth * dpr) || cv.height !== Math.round(cv.clientHeight * dpr)) {
         cv.width = Math.round(cv.clientWidth * dpr);
@@ -182,10 +201,8 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
         cache = { id: running.id, params: running.params, progress: running.progress, view: parseLevel(running)! };
 
       const cur = conn.db.cursor.id.find(0);
-      if (cur) {
-        rc.x += (cur.x - rc.x) * 0.35;
-        rc.y += (cur.y - rc.y) * 0.35;
-      }
+      const cfg = conn.db.config.id.find(0);
+      if (cur && cfg) rc = smoother.step(dt, cfg, running && cache ? cursorHoldUntilMs(cache.view) : 0);
 
       // World is stretched to fill the pad (pad position == world position).
       g.setTransform(sx, 0, 0, sy, 0, 0);
@@ -236,8 +253,11 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
         g.stroke();
       }
     };
-    draw();
-    return () => cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(raf);
+      conn.db.cursor.removeOnUpdate(onCursor);
+    };
   }, [conn, color]);
 
   // Banners (polled at 4 Hz so React stays out of the frame loop).
@@ -295,10 +315,14 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
               (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
               const p = toNorm(e);
               finger.current = p;
+              pump.current();
               down.current = { t: performance.now(), ...p };
             }}
             onPointerMove={e => {
-              if (e.pointerType === 'mouse' || e.buttons) finger.current = toNorm(e);
+              if (e.pointerType === 'mouse' || e.buttons) {
+                finger.current = toNorm(e);
+                pump.current();
+              }
             }}
             onPointerUp={e => {
               const p = toNorm(e);

@@ -44,6 +44,8 @@ type Ctx = ReducerCtx<InferSchema<typeof spacetimedb>>;
 
 
 const MICROS = 1_000_000n;
+/** set_pointer may run this many rate-limit intervals ahead before calls are dropped. */
+const POINTER_BURST = 4n;
 
 const now = (ctx: Ctx) => ctx.timestamp.microsSinceUnixEpoch;
 const ts = (micros: bigint) => new Timestamp(micros);
@@ -133,6 +135,7 @@ function refreshPresence(ctx: Ctx, identity: Identity) {
   if (p.connected !== online) ctx.db.player.identity.update({ ...p, connected: online });
   if (!online) {
     ctx.db.pointer.identity.delete(identity);
+    ctx.db.pointerRate.identity.delete(identity);
     ctx.db.clickVote.identity.delete(identity);
   }
 }
@@ -332,13 +335,15 @@ export const init = spacetimedb.init(ctx => {
   ctx.db.config.insert({
     id: 0,
     rule: 'mean',
-    pointerHz: 8,
+    // Sending faster than the tick just overwrites itself before it is read.
+    pointerHz: 15,
     pointerBudget: 400,
-    pointerHzEffective: 8,
+    pointerHzEffective: 15,
     tickHz: 15,
-    gain: 6,
-    damping: 4.5,
-    maxSpeed: 7,
+    // omega ~6.3 rad/s, zeta ~0.95: covers half the distance in ~0.27 s.
+    gain: 40,
+    damping: 12,
+    maxSpeed: 20,
     influenceCap: 0.25,
     quorumMin: 1,
     quorumFrac: 0.3,
@@ -425,15 +430,23 @@ export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx,
   if (!p || !p.connected) throw new SenderError('join first');
   const cx = clamp(x, 0, 1);
   const cy = clamp(y, 0, 1);
+  // Safety-net rate limit (GCRA) at 2x the advertised rate with a burst of a few
+  // calls, so packets bunched by mobile Wi-Fi land instead of the newest being dropped.
+  // The real lever is the client throttle.
+  const tNow = now(ctx);
+  const intervalUs = BigInt(Math.floor(1e6 / (getConfig(ctx).pointerHzEffective * 2)));
+  const rate = ctx.db.pointerRate.identity.find(ctx.sender);
+  const tat = rate && rate.tatUs > tNow ? rate.tatUs : tNow;
+  if (tat - tNow > POINTER_BURST * intervalUs) return;
+  if (rate) ctx.db.pointerRate.identity.update({ ...rate, tatUs: tat + intervalUs });
+  else ctx.db.pointerRate.insert({ identity: ctx.sender, tatUs: tat + intervalUs });
+
   const prev = ctx.db.pointer.identity.find(ctx.sender);
   if (!prev) {
     ctx.db.pointer.insert({ identity: ctx.sender, x: cx, y: cy, activity: 0, updatedAt: ctx.timestamp });
     return;
   }
-  const dtUs = now(ctx) - prev.updatedAt.microsSinceUnixEpoch;
-  // Safety-net rate limit at 2x the advertised rate; the real lever is the client throttle.
-  const minGapUs = BigInt(Math.floor(1e6 / (getConfig(ctx).pointerHzEffective * 2)));
-  if (dtUs < minGapUs) return;
+  const dtUs = tNow - prev.updatedAt.microsSinceUnixEpoch;
   const decay = Math.exp(-Number(dtUs) / 1.5e6);
   const activity = prev.activity * decay + Math.hypot(cx - prev.x, cy - prev.y);
   ctx.db.pointer.identity.update({ ...prev, x: cx, y: cy, activity, updatedAt: ctx.timestamp });
@@ -790,6 +803,7 @@ export const admin_kick = spacetimedb.reducer({ who: t.identity() }, (ctx, { who
   const p = ctx.db.player.identity.find(who);
   ctx.db.player.identity.delete(who);
   ctx.db.pointer.identity.delete(who);
+  ctx.db.pointerRate.identity.delete(who);
   ctx.db.clickVote.identity.delete(who);
   ctx.db.playerStats.identity.delete(who);
   const until = ts(now(ctx) + 120n * MICROS);

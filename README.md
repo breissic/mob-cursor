@@ -19,7 +19,7 @@ Crowd-controlled interfaces (Twitch Plays Pokémon, r/place) are fun because coo
 ```mermaid
 flowchart LR
   subgraph Phones["Phones (#/play)"]
-    P1[pad: set_pointer 1-8 Hz<br/>tap: click]
+    P1[pad: set_pointer 1-15 Hz<br/>tap: click]
   end
   subgraph MC["SpacetimeDB Maincloud: module mob-cursor-live"]
     R[reducers<br/>join / set_pointer / click / admin_*]
@@ -60,7 +60,7 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 
 | Feature | Status |
 |---|---|
-| Shared cursor, 15 Hz server tick, client interpolation | ✅ verified locally and on Maincloud |
+| Shared cursor, 15 Hz server tick, client-side prediction | ✅ verified locally and on Maincloud |
 | Join via QR, mobile pad, names/colors/teams, presence cleanup | ✅ verified (headless iPhone viewport) |
 | Per-route subscription scoping (phones never get `pointer`) | ✅ |
 | Control rules: mean, geometric median, activity-weighted (capped), team tug-of-war, rotating dictator | ✅ unit-tested + live switchable |
@@ -95,9 +95,9 @@ Chaos is `1 - |mean of unit vectors from the cursor to each pointer|`: 0 when ev
 
 The pointer stream dominates cost, so the client throttle is the main lever:
 
-- Clients send at `config.pointerHzEffective = clamp(min(pointerHz, pointerBudget / players), 1, 30)`. The defaults are 8 Hz and a 400 calls/s budget, and clients follow live changes.
-- A send happens only if the pointer moved more than 1% of the pad, plus a 1 s heartbeat, and only while the tab is visible.
-- `set_pointer` validates and clamps input, and silently drops calls faster than 2x the advertised rate as a safety net.
+- Clients send at `config.pointerHzEffective = clamp(min(pointerHz, pointerBudget / players), 1, 30)`. The defaults are 15 Hz (the tick rate; anything faster is overwritten before the tick reads it) and a 400 calls/s budget, and clients follow live changes.
+- A move sends immediately if a full interval has passed (leading edge), otherwise at the end of the interval. Moves under 0.4% of the pad are skipped apart from a 1 s heartbeat, and nothing is sent while the tab is hidden.
+- `set_pointer` validates and clamps input, and silently drops calls beyond 2x the advertised rate (with a burst allowance of 4, so network-bunched packets still land) as a safety net.
 - The display HUD shows observed pointer, click and tick calls per second.
 
 ### Measured on Maincloud (`scripts/bots.ts`, throwaway DB `mob-cursor-loadtest`)
