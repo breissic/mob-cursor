@@ -76,7 +76,7 @@ const goalTimer = setInterval(() => (goal = { x: 0.1 + Math.random() * 0.8, y: 0
 
 async function runBot(b: Bot) {
   while (performance.now() - t0 < SECONDS * 1000) {
-    const hz = b.conn.db.config.id.find(0)?.pointerHzEffective ?? 8;
+    const hz = b.conn.db.config.id.find(0)?.pointerHzEffective ?? 15;
     const g = b.troll ? { x: 1 - goal.x, y: 1 - goal.y } : goal;
     b.x += (g.x - b.x) * 0.15 + (Math.random() - 0.5) * 0.04;
     b.y += (g.y - b.y) * 0.15 + (Math.random() - 0.5) * 0.04;

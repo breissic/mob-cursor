@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { tables, type DbConnection } from '../module_bindings';
 import { useConnState, usePoll, useRows } from '../lib/stdb';
 import { observeClock, serverNowMs } from '../lib/clock';
-import { COLORS, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
+import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
+import { COLORS, cursorPhysics, ghostKey, unpackGhosts, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
 import { drawField, drawLevel, GAME_META, parseLevel, type LevelView } from '../game/draw';
 import { blit, spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
 
 const NAME_KEY = 'mob-cursor/name';
-const DEADBAND = 0.01; // 1% of the pad
+const DEADBAND = 0.004; // 0.4% of the pad
 const HEARTBEAT_MS = 1000;
+/** ghost_frame is written every 3rd tick; ghosts glide to each frame over this long. */
+const GHOST_TICKS = 3;
 const SILLY = ['Clicky McClick', 'Sir Hovers', 'Mouse Potato', 'Captain Drag', 'Lord Scroll', 'Doubleclick Dan', 'Cursed Cursor', 'Pixel Pete', 'Hover Hannah', 'Right-Click Rita', 'Tab Goblin', 'Ctrl Freak'];
 
 type LevelRow = { id: bigint; kind: string; state: string; params: string; progress: string; score: number; endedAt?: { microsSinceUnixEpoch: bigint } | null };
@@ -98,43 +101,55 @@ export default function Play() {
     );
   }
 
-  return <Remote conn={conn!} color={me.color} name={me.name} score={me.score} team={me.team} />;
+  return <Remote conn={conn!} selfKey={ghostKey(identity!.toHexString())} color={me.color} name={me.name} score={me.score} team={me.team} />;
 }
 
-function Remote({ conn, color, name, score, team }: { conn: DbConnection; color: string; name: string; score: number; team: number }) {
+function Remote({ conn, selfKey, color, name, score, team }: { conn: DbConnection; selfKey: number; color: string; name: string; score: number; team: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const finger = useRef<{ x: number; y: number } | null>(null);
   const tapRings = useRef<{ x: number; y: number; t: number }[]>([]);
   const [sent, setSent] = useState(0);
 
+  // Called on every finger move; the sender effect swaps in the real pump.
+  const pump = useRef<() => void>(() => {});
+
   // Throttled sender: obeys config.pointerHzEffective live, dead-band + heartbeat.
+  // Leading edge: a move sends at once if a full interval has passed, otherwise a
+  // trailing send is armed for the end of the interval so the last position lands.
   useEffect(() => {
     let lastSent: { x: number; y: number } | null = null;
-    let lastAt = 0;
+    let lastAt = -Infinity;
     let timer = 0;
     let count = 0;
-    const loop = () => {
-      const hz = conn.db.config.id.find(0)?.pointerHzEffective ?? 8;
-      const f = finger.current;
-      const now = performance.now();
-      if (f && document.visibilityState === 'visible') {
-        const moved = !lastSent || Math.hypot(f.x - lastSent.x, f.y - lastSent.y) > DEADBAND;
-        if (moved || now - lastAt > HEARTBEAT_MS) {
-          conn.reducers.setPointer({ x: f.x, y: f.y }).catch(() => {});
-          lastSent = { ...f };
-          lastAt = now;
-          count++;
-        }
-      }
-      timer = window.setTimeout(loop, 1000 / Math.max(1, hz));
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = window.setTimeout(run, ms);
     };
-    loop();
+    const run = () => {
+      const f = finger.current;
+      if (!f || document.visibilityState !== 'visible') return;
+      const hz = conn.db.config.id.find(0)?.pointerHzEffective ?? 15;
+      const now = performance.now();
+      const moved = !lastSent || Math.hypot(f.x - lastSent.x, f.y - lastSent.y) > DEADBAND;
+      if (!moved && now - lastAt < HEARTBEAT_MS) return arm(lastAt + HEARTBEAT_MS - now);
+      const wait = lastAt + 1000 / Math.max(1, hz) - now;
+      if (wait > 0) return arm(wait);
+      conn.reducers.setPointer({ x: f.x, y: f.y }).catch(() => {});
+      lastSent = { ...f };
+      lastAt = now;
+      count++;
+      arm(HEARTBEAT_MS);
+    };
+    pump.current = run;
+    document.addEventListener('visibilitychange', run);
     const stat = window.setInterval(() => {
       setSent(count);
       count = 0;
     }, 1000);
     return () => {
+      pump.current = () => {};
+      document.removeEventListener('visibilitychange', run);
       clearTimeout(timer);
       clearInterval(stat);
     };
@@ -161,9 +176,28 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
     const g = cv.getContext('2d')!;
     let raf = 0;
     let cache: { id: bigint; params: string; progress: string; view: LevelView } | null = null;
-    const rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
-    const draw = () => {
+    const smoother = createCursorSmoother();
+    const onCursor = (_c: unknown, _o: unknown, row: Parameters<typeof smoother.push>[0]) => smoother.push(row);
+    conn.db.cursor.onUpdate(onCursor);
+    let rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
+    let last = performance.now();
+    // Other players, keyed by ghost key + color, gliding between ghost frames.
+    type Glide = ReturnType<typeof unpackGhosts>[number] & { fromX: number; fromY: number; t0: number; dur: number };
+    const ghosts = new Map<string, Glide>();
+    let pending: Uint8Array | null = null;
+    const onFrame = (_c: unknown, row: { data: Uint8Array }) => (pending = row.data);
+    const onFrameUpdate = (c: unknown, _o: unknown, row: { data: Uint8Array }) => onFrame(c, row);
+    conn.db.ghostFrame.onInsert(onFrame);
+    conn.db.ghostFrame.onUpdate(onFrameUpdate);
+    pending = conn.db.ghostFrame.id.find(0)?.data ?? null;
+    const ghostPos = (gh: Glide, t: number) => {
+      const f = gh.dur > 0 ? Math.min(1, (t - gh.t0) / gh.dur) : 1;
+      return { x: gh.fromX + (gh.x - gh.fromX) * f, y: gh.fromY + (gh.y - gh.fromY) * f };
+    };
+    const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
       const dpr = window.devicePixelRatio || 1;
       if (cv.width !== Math.round(cv.clientWidth * dpr) || cv.height !== Math.round(cv.clientHeight * dpr)) {
         cv.width = Math.round(cv.clientWidth * dpr);
@@ -182,9 +216,10 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
         cache = { id: running.id, params: running.params, progress: running.progress, view: parseLevel(running)! };
 
       const cur = conn.db.cursor.id.find(0);
-      if (cur) {
-        rc.x += (cur.x - rc.x) * 0.35;
-        rc.y += (cur.y - rc.y) * 0.35;
+      const cfg = conn.db.config.id.find(0);
+      if (cur && cfg) {
+        const phys = { ...cursorPhysics(running?.kind, cfg), tickHz: cfg.tickHz };
+        rc = smoother.step(dt, phys, running && cache ? cursorHoldUntilMs(cache.view) : 0);
       }
 
       // World is stretched to fill the pad (pad position == world position).
@@ -195,14 +230,33 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
 
       // Sprites in screen space so they are not stretched.
       g.setTransform(1, 0, 0, 1, 0, 0);
-      const frame = conn.db.ghostFrame.id.find(0)?.data;
+      const frame = pending;
       if (frame) {
-        for (let i = 0; i + 3 < frame.length; i += 4) {
-          const gx = (frame[i + 2] / 255) * W;
-          const gy = (frame[i + 3] / 255) * H;
-          blit(g, 'cursor', gx, gy, 1.2 * dpr, { tint: COLORS[frame[i]] ?? '#999', alpha: 0.85 });
-          if (frame[i + 1] & 2) blit(g, 'crown', gx - 2 * dpr, gy - 10 * dpr, 0.9 * dpr);
+        // New frame: each ghost glides from where it is drawn now to its new spot,
+        // so 5 Hz data moves at a steady 60 fps. Gliding a bit longer than one
+        // interval means a slightly late frame re-targets mid-glide instead of the
+        // ghost stopping and starting.
+        pending = null;
+        const glideMs = (1.25 * GHOST_TICKS * 1000) / Math.max(1, cfg?.tickHz ?? 15);
+        const seen = new Set<string>();
+        for (const r of unpackGhosts(frame)) {
+          // You are the big dot under your finger; a lagging copy of you looks broken.
+          if (r.key === selfKey && COLORS[r.color] === color) continue;
+          const id = `${r.key}:${r.color}`;
+          if (seen.has(id)) continue; // key collision: draw one rather than swap
+          seen.add(id);
+          const gh = ghosts.get(id);
+          const at = gh ? ghostPos(gh, t) : { x: r.x, y: r.y };
+          ghosts.set(id, { ...r, fromX: at.x, fromY: at.y, t0: t, dur: gh ? glideMs : 0 });
         }
+        for (const id of ghosts.keys()) if (!seen.has(id)) ghosts.delete(id);
+      }
+      for (const gh of ghosts.values()) {
+        const p = ghostPos(gh, t);
+        const gx = p.x * W;
+        const gy = p.y * H;
+        blit(g, 'cursor', gx, gy, 1.2 * dpr, { tint: COLORS[gh.color] ?? '#999', alpha: 0.85 });
+        if (gh.dictator) blit(g, 'crown', gx - 2 * dpr, gy - 10 * dpr, 0.9 * dpr);
       }
       const f = finger.current;
       if (f && cur) {
@@ -236,9 +290,14 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
         g.stroke();
       }
     };
-    draw();
-    return () => cancelAnimationFrame(raf);
-  }, [conn, color]);
+    raf = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(raf);
+      conn.db.cursor.removeOnUpdate(onCursor);
+      conn.db.ghostFrame.removeOnInsert(onFrame);
+      conn.db.ghostFrame.removeOnUpdate(onFrameUpdate);
+    };
+  }, [conn, color, selfKey]);
 
   // Banners (polled at 4 Hz so React stays out of the frame loop).
   const banner = usePoll(() => {
@@ -298,10 +357,14 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
               (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
               const p = toNorm(e);
               finger.current = p;
+              pump.current();
               down.current = { t: performance.now(), ...p };
             }}
             onPointerMove={e => {
-              if (e.pointerType === 'mouse' || e.buttons) finger.current = toNorm(e);
+              if (e.pointerType === 'mouse' || e.buttons) {
+                finger.current = toNorm(e);
+                pump.current();
+              }
             }}
             onPointerUp={e => {
               const p = toNorm(e);
