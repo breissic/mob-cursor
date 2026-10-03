@@ -117,6 +117,9 @@ export default function Admin() {
           <button className="go" onClick={() => void run('next', conn.reducers.adminStartLevel({ kind: 'next' }))}>
             ⏭ NEXT STAGE
           </button>
+          <button className="on" onClick={() => void run('vote', conn.reducers.adminStartLevel({ kind: 'vote' }))}>
+            🗳 VOTE NOW
+          </button>
           <button onClick={() => void run('stop', conn.reducers.adminStopLevel({}))}>⏹ STOP → LOBBY</button>
           <button
             className="hot"

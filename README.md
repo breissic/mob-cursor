@@ -70,6 +70,7 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 | Levels: targets, maze, minesweeper; auto-advance | ✅ |
 | Leaderboard, awards from per-level stats | ✅ |
 | Party flow: each game runs 3 stages of rising difficulty (moving targets, bigger mazes, more mines), 3-2-1 countdown, results screen, auto-advance | ✅ |
+| Vote round between games: a 3-2-1 countdown, then 7 s to park the extra-strong cursor on the next game's card; whatever it hovers when time runs out wins | ✅ |
 | Minesweeper auto-click: the server clicks wherever the cursor is after a random 2-30 s, with a 5 s fuse shown on screen | ✅ |
 | Everyone's ghost cursors on phones too, from one packed `ghost_frame` row at 5 Hz (no pointer subscription) | ✅ |
 | "MobOS 95" UI: pixel-art sprite set generated from code (`src/game/sprites.ts`, SVGs in `public/assets/`), lobby, intro and results dialogs | ✅ |

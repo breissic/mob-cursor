@@ -12,6 +12,9 @@ import {
   sha256Hex,
   targetPos,
   STAGE_SPECS,
+  voteLayout,
+  voteWinner,
+  VOTE_START,
   type Pt,
 } from '../src/sim.ts';
 
@@ -126,4 +129,21 @@ test('stage specs get harder', () => {
   const m = STAGE_SPECS.minesweeper;
   assert.ok(m[2].mines > m[1].mines && m[1].mines > m[0].mines);
   assert.ok(STAGE_SPECS.maze[2].cw > STAGE_SPECS.maze[0].cw);
+});
+
+test('vote: cards fit the field, start spot is outside every card', () => {
+  const cards = voteLayout(['targets', 'maze', 'minesweeper']);
+  for (const c of cards) {
+    assert.ok(c.x >= 0 && c.x + c.w <= 16 && c.y >= 0 && c.y + c.h <= 9);
+    assert.ok(!(VOTE_START.x >= c.x && VOTE_START.x <= c.x + c.w && VOTE_START.y >= c.y && VOTE_START.y <= c.y + c.h));
+  }
+});
+
+test('vote: hovered card wins, otherwise the nearest', () => {
+  const cards = voteLayout(['targets', 'maze', 'minesweeper']);
+  const mid = (i: number) => ({ x: cards[i].x + cards[i].w / 2, y: cards[i].y + cards[i].h / 2 });
+  for (let i = 0; i < 3; i++) assert.equal(voteWinner(cards, mid(i).x, mid(i).y).kind, cards[i].kind);
+  assert.equal(voteWinner(cards, 0.1, 8.9).kind, 'targets');
+  assert.equal(voteWinner(cards, 15.9, 0.1).kind, 'minesweeper');
+  assert.equal(voteWinner(cards, VOTE_START.x, VOTE_START.y).kind, 'maze');
 });

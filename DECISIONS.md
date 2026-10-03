@@ -34,6 +34,8 @@ Small decisions made while building, newest at the bottom of each section.
 - **Minesweeper auto-click**: `progress.nextAutoAt` is public, and each fire re-rolls it to a random 2-30 s ahead using `ctx.random`. It's public so the display can show a 5 s fuse at the end, but the display never shows the full countdown, which keeps the surprise. `revealCell` now spreads the old progress so the timer survives a reveal.
 - **`ghost_frame` table** (additive): 4 bytes per fresh pointer, `[colorIndex, flags, x, y]`, at 5 Hz. The palette moved to `sim.ts` (`COLORS`) so the server and client agree on the color index.
 
+- **Vote round** (`kind: 'vote'`, which is just another level row, so there's no schema change): after a game's 3rd stage, or on admin "next"/"vote", the mob gets a 3-2-1 countdown, then 7 s to park the cursor on a game card. The cursor runs at 2.5x gain and 2x top speed for the vote. When time is up, the card under the cursor wins; if the cursor is between cards, the nearest one wins, so there's always a winner. The winning game's stage 1 starts in the same tick. Card layout and winner logic live in `sim.ts` (`voteLayout`, `voteWinner`) so the display's "LEADING" chip matches the server.
+
 ## Client
 - **Hash routes** (`#/display`, `#/play`, `#/admin`), so the static host needs no rewrites.
 - **No React re-render per frame**: the canvas reads `conn.db` in rAF. React chrome uses `useRows`, which coalesces table callbacks to at most every 100-500 ms.
