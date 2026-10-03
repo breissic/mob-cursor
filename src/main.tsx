@@ -4,6 +4,8 @@ import { connect } from './lib/stdb';
 import Display from './routes/Display';
 import Play from './routes/Play';
 import Admin from './routes/Admin';
+import { Win } from './ui/Win';
+import { spriteUrl } from './game/sprites';
 import './style.css';
 
 // Hash routes so the static host needs no SPA rewrite rules.
@@ -19,12 +21,24 @@ function useHashRoute() {
 
 function Home() {
   return (
-    <div className="play-center home">
-      <h1>MOB CURSOR</h1>
-      <p>One shared cursor. Everyone pulls. Chaos ensues.</p>
-      <a href="#/display">📽 Display (projector)</a>
-      <a href="#/play">📱 Play</a>
-      <a href="#/admin">🛠 Admin</a>
+    <div className="home">
+      <Win title="MOBOS 95 — Start" color="#ffd23f" icon={spriteUrl('cursor', '#fff')} className="dialog">
+        <div className="logo">
+          <img src={spriteUrl('cursor', '#ffffff')} alt="" />
+          <span>
+            MOB <span className="c2">CURSOR</span>
+          </span>
+        </div>
+        <a className="btn" href="#/display">
+          📽 DISPLAY.EXE — put this on the projector
+        </a>
+        <a className="btn" href="#/play">
+          📱 REMOTE.EXE — join on your phone
+        </a>
+        <a className="btn" href="#/admin">
+          🛠 CONTROL.EXE — host controls
+        </a>
+      </Win>
     </div>
   );
 }

@@ -1,14 +1,8 @@
 import type { DbConnection } from '../module_bindings';
-import {
-  WORLD_H,
-  WORLD_W,
-  type MazeParams,
-  type MazeProgress,
-  type MinesParams,
-  type MinesProgress,
-  type TargetsParams,
-  type TargetsProgress,
-} from '../../spacetimedb/src/sim';
+import { WORLD_H, WORLD_W, type MinesProgress } from '../../spacetimedb/src/sim';
+import { drawCursorSprite, drawField, drawFuse, drawLevel, fieldColor, nameTag, parseLevel, worldText, type LevelView } from '../game/draw';
+import { blit } from '../game/sprites';
+import { serverNowMs } from '../lib/clock';
 import { sfx } from './audio';
 
 // Canvas renderer for the projector view. Runs in requestAnimationFrame and
@@ -27,15 +21,19 @@ type Particle = {
   y: number;
   vx: number;
   vy: number;
+  rot: number;
+  vr: number;
   life: number;
   max: number;
   color: string;
   size: number;
-  kind: 'dot' | 'ring' | 'text';
+  kind: 'confetti' | 'ring' | 'text' | 'star';
   text?: string;
 };
 
 type Ghost = { x: number; y: number; seen: number };
+
+const CONFETTI = ['#ff5a36', '#ffd23f', '#2ec4b6', '#3a86ff', '#ff4fa3', '#ffffff'];
 
 export function startRenderer(
   canvas: HTMLCanvasElement,
@@ -49,79 +47,113 @@ export function startRenderer(
   const particles: Particle[] = [];
   let shake = 0;
   let flash = 0;
-  // Smoothed render position of the shared cursor.
+  let flashColor = '255,59,59';
   const rc = { x: WORLD_W / 2, y: WORLD_H / 2, init: false };
-  // Latest snapshot + local receive time, for extrapolation.
   let snap = { x: WORLD_W / 2, y: WORLD_H / 2, vx: 0, vy: 0, at: performance.now() };
-  // serverMicros - localMs*1000, minimum seen (best estimate of clock offset).
-  let clockOffsetUs: number | null = null;
 
-  const colorOf = (hex: string) => {
-    for (const p of conn.db.player.iter()) if (p.identity.toHexString() === hex) return p.color;
-    return '#fff';
+  const playerOf = (hex: string) => {
+    for (const p of conn.db.player.iter()) if (p.identity.toHexString() === hex) return p;
+    return undefined;
   };
 
   const onPointer = (_c: unknown, row: { identity: { toHexString(): string } }) => {
     counters.pointer++;
-    const id = row.identity.toHexString();
-    const gh = ghosts.get(id);
+    const gh = ghosts.get(row.identity.toHexString());
     if (gh) gh.seen = performance.now();
   };
-  const onCursor = (_c: unknown, _o: unknown, row: { x: number; y: number; vx: number; vy: number; lastTickAt: { microsSinceUnixEpoch: bigint } }) => {
+  const onPointerUpdate = (c: unknown, _o: unknown, n: { identity: { toHexString(): string } }) => onPointer(c, n);
+  const onCursor = (_c: unknown, _o: unknown, row: { x: number; y: number; vx: number; vy: number }) => {
     counters.ticks++;
-    const nowMs = performance.now();
-    snap = { x: row.x, y: row.y, vx: row.vx, vy: row.vy, at: nowMs };
-    const off = Number(row.lastTickAt.microsSinceUnixEpoch) - (performance.timeOrigin + nowMs) * 1000;
-    clockOffsetUs = clockOffsetUs === null ? off : Math.max(off, clockOffsetUs - 2000);
+    snap = { x: row.x, y: row.y, vx: row.vx, vy: row.vy, at: performance.now() };
   };
   const onFx = (_c: unknown, row: { kind: string; x: number; y: number; who: string }) => {
     sfx(row.kind);
-    if (row.kind === 'vote') {
-      counters.votes++;
-      particles.push({ x: row.x, y: row.y, vx: 0, vy: 0, life: 0.6, max: 0.6, color: colorOf(row.who), size: 0.6, kind: 'ring' });
-    } else if (row.kind === 'click') {
-      particles.push({ x: row.x, y: row.y, vx: 0, vy: 0, life: 0.8, max: 0.8, color: '#fff', size: 1.6, kind: 'ring' });
-    } else if (row.kind === 'target' || row.kind === 'reveal') {
-      burst(row.x, row.y, row.kind === 'target' ? 30 : 10, ['#ffd43b', '#69db7c', '#4dabf7']);
-    } else if (row.kind === 'wall' || row.kind === 'mine') {
-      shake = row.kind === 'mine' ? 1 : 0.6;
-      flash = 0.5;
-      burst(row.x, row.y, 25, ['#ff4d6d', '#ff922b']);
-      particles.push({ x: row.x, y: row.y - 0.5, vx: 0, vy: -0.8, life: 1.2, max: 1.2, color: '#ff4d6d', size: 0.6, kind: 'text', text: row.kind === 'mine' ? 'BOOM' : 'BONK' });
-    } else if (row.kind === 'win') {
-      for (let i = 0; i < 6; i++) burst(Math.random() * WORLD_W, Math.random() * WORLD_H * 0.5, 40, ['#ff4d6d', '#ffd43b', '#69db7c', '#4dabf7', '#da77f2']);
-    } else if (row.kind === 'lose') {
-      shake = 1;
-      flash = 1;
-    } else if (row.kind === 'dictator') {
-      particles.push({ x: row.x, y: row.y - 0.6, vx: 0, vy: -0.5, life: 2, max: 2, color: '#ffd43b', size: 0.5, kind: 'text', text: '👑' });
+    const add = (p: Partial<Particle> & Pick<Particle, 'kind' | 'life'>) =>
+      particles.push({ x: row.x, y: row.y, vx: 0, vy: 0, rot: 0, vr: 0, max: p.life, color: '#fff', size: 0.5, ...p });
+    switch (row.kind) {
+      case 'vote':
+        counters.votes++;
+        add({ kind: 'ring', life: 0.5, color: playerOf(row.who)?.color ?? '#fff', size: 0.7 });
+        break;
+      case 'click':
+        add({ kind: 'ring', life: 0.7, color: '#111', size: 1.8 });
+        add({ kind: 'text', life: 0.9, text: 'CLICK!', color: '#ffd23f', size: 0.55, vy: -1.2 });
+        break;
+      case 'autoclick':
+        shake = 0.5;
+        add({ kind: 'ring', life: 0.9, color: '#ff3b3b', size: 2.4 });
+        add({ kind: 'text', life: 1.3, text: 'AUTO-CLICK!', color: '#ff3b3b', size: 0.7, vy: -1 });
+        break;
+      case 'target':
+        burst(row.x, row.y, 36);
+        for (let i = 0; i < 5; i++)
+          add({ kind: 'star', life: 1, vx: Math.cos(i * 1.26) * 3, vy: Math.sin(i * 1.26) * 3 - 2, size: 0.04 });
+        add({ kind: 'text', life: 1, text: 'NICE!', color: '#2ec4b6', size: 0.6, vy: -1.4 });
+        break;
+      case 'reveal':
+        burst(row.x, row.y, 10);
+        break;
+      case 'wall':
+        shake = 0.7;
+        flash = 0.6;
+        flashColor = '255,138,61';
+        add({ kind: 'text', life: 1.2, text: 'BONK!', color: '#ff8a3d', size: 0.8, vy: -1 });
+        break;
+      case 'mine':
+        shake = 1.2;
+        flash = 0.9;
+        flashColor = '255,59,59';
+        for (let i = 0; i < 3; i++) burst(row.x, row.y, 30);
+        add({ kind: 'text', life: 1.4, text: 'KABOOM!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
+        break;
+      case 'win':
+        for (let i = 0; i < 10; i++) burst(Math.random() * WORLD_W, -0.5, 30, 1);
+        break;
+      case 'lose':
+        shake = 1;
+        flash = 1;
+        flashColor = '40,40,40';
+        break;
+      case 'dictator':
+        add({ kind: 'text', life: 2, text: 'DICTATOR!', color: '#ffd23f', size: 0.5, vy: -0.4, y: row.y - 0.6 });
+        break;
     }
   };
 
-  function burst(x: number, y: number, n: number, colors: string[]) {
+  function burst(x: number, y: number, n: number, down = 0) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = 1 + Math.random() * 5;
-      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2, life: 1.2, max: 1.2, color: colors[i % colors.length], size: 0.08 + Math.random() * 0.1, kind: 'dot' });
+      const s = 1.5 + Math.random() * 5;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: down ? Math.random() * 2 : Math.sin(a) * s - 3,
+        rot: Math.random() * 6,
+        vr: (Math.random() - 0.5) * 12,
+        life: 1.6 + Math.random(),
+        max: 2.6,
+        color: CONFETTI[i % CONFETTI.length],
+        size: 0.1 + Math.random() * 0.12,
+        kind: 'confetti',
+      });
     }
   }
 
   conn.db.pointer.onInsert(onPointer);
-  const onPointerUpdate = (c: unknown, _o: unknown, n: { identity: { toHexString(): string } }) => onPointer(c, n);
   conn.db.pointer.onUpdate(onPointerUpdate);
   conn.db.cursor.onUpdate(onCursor);
   conn.db.fx.onInsert(onFx);
 
-  // Parsed-level cache so we don't JSON.parse every frame.
-  let lvlCache: { id: bigint; params: string; progress: string; p: unknown; prog: unknown } | null = null;
+  let lvlCache: { id: bigint; params: string; progress: string; view: LevelView } | null = null;
   const currentLevel = () => {
     let best = null as ReturnType<typeof conn.db.level.id.find>;
     for (const l of conn.db.level.iter()) if (!best || l.id > best.id) best = l;
     if (!best) return null;
     if (!lvlCache || lvlCache.id !== best.id || lvlCache.params !== best.params || lvlCache.progress !== best.progress) {
-      lvlCache = { id: best.id, params: best.params, progress: best.progress, p: JSON.parse(best.params), prog: JSON.parse(best.progress) };
+      lvlCache = { id: best.id, params: best.params, progress: best.progress, view: parseLevel(best)! };
     }
-    return { row: best, p: lvlCache.p, prog: lvlCache.prog };
+    return { row: best, view: lvlCache.view };
   };
 
   let raf = 0;
@@ -142,8 +174,8 @@ export function startRenderer(
       counters.pointer = counters.votes = counters.ticks = counters.frames = 0;
       statT = t;
     }
+    const serverMs = serverNowMs();
 
-    // Resize to device pixels.
     const dpr = window.devicePixelRatio || 1;
     const cw = canvas.clientWidth;
     const ch = canvas.clientHeight;
@@ -151,38 +183,32 @@ export function startRenderer(
       canvas.width = Math.round(cw * dpr);
       canvas.height = Math.round(ch * dpr);
     }
+    const lvl = currentLevel();
+    const running = lvl && lvl.row.state === 'running' ? lvl : null;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = '#0b0d17';
+    g.fillStyle = fieldColor(running ? running.row.kind : 'lobby');
     g.fillRect(0, 0, canvas.width, canvas.height);
 
-    // World -> screen: fit 16:9 with margin, plus screen shake.
-    const scale = Math.min((canvas.width * 0.96) / WORLD_W, (canvas.height * 0.9) / WORLD_H);
-    const ox = (canvas.width - WORLD_W * scale) / 2 + (Math.random() - 0.5) * shake * 30 * dpr;
-    const oy = (canvas.height - WORLD_H * scale) / 2 + 20 * dpr + (Math.random() - 0.5) * shake * 30 * dpr;
-    shake = Math.max(0, shake - dt * 2);
+    // Fit the 16:9 world exactly into the window body, plus screen shake.
+    const scale = Math.min(canvas.width / WORLD_W, canvas.height / WORLD_H);
+    const sh = shake * 0.25 * scale;
+    const ox = (canvas.width - WORLD_W * scale) / 2 + (Math.random() - 0.5) * sh;
+    const oy = (canvas.height - WORLD_H * scale) / 2 + (Math.random() - 0.5) * sh;
+    shake = Math.max(0, shake - dt * 2.2);
     g.setTransform(scale, 0, 0, scale, ox, oy);
-    const px = 1 / scale; // one device pixel in world units
+    const px = 1 / scale * dpr;
 
-    // Playfield.
-    g.fillStyle = '#141829';
-    g.fillRect(0, 0, WORLD_W, WORLD_H);
-    g.strokeStyle = '#2a3150';
-    g.lineWidth = 2 * px;
-    g.strokeRect(0, 0, WORLD_W, WORLD_H);
+    drawField(g, running ? running.row.kind : 'lobby', px);
 
     const heat = opts.heatmap();
     if (heat) {
+      g.fillStyle = 'rgba(255, 79, 163, 0.12)';
       for (const [x, y] of heat) {
-        g.fillStyle = 'rgba(255, 80, 120, 0.08)';
         g.beginPath();
-        g.arc(x, y, 0.5, 0, Math.PI * 2);
+        g.arc(x, y, 0.45, 0, Math.PI * 2);
         g.fill();
       }
     }
-
-    const lvl = currentLevel();
-    const running = lvl && lvl.row.state === 'running';
-    if (lvl && running) drawLevel(lvl.row.kind, lvl.p, lvl.prog, px, t);
 
     // Cursor interpolation: extrapolate the latest snapshot, then ease toward it.
     const cur = conn.db.cursor.id.find(0);
@@ -190,25 +216,23 @@ export function startRenderer(
       const age = Math.min(0.15, (t - snap.at) / 1000);
       const ex = snap.x + snap.vx * age;
       const ey = snap.y + snap.vy * age;
-      if (!rc.init) {
+      if (!rc.init || Math.hypot(ex - rc.x, ey - rc.y) > 3) {
         rc.x = ex;
         rc.y = ey;
         rc.init = true;
       }
       const k = 1 - Math.exp(-dt * 18);
-      // Teleports (maze respawn) snap instantly.
-      if (Math.hypot(ex - rc.x, ey - rc.y) > 3) {
-        rc.x = ex;
-        rc.y = ey;
-      }
       rc.x += (ex - rc.x) * k;
       rc.y += (ey - rc.y) * k;
     }
 
-    // Ghost cursors: everyone's pull, with a tug line to the shared cursor.
+    if (running) drawLevel(g, running.view, px, serverMs, rc);
+
+    // Ghost cursors: everyone's pull, with a faint tug line to the shared cursor.
     const nowMs = performance.now();
     const fresh = new Set<string>();
     const dictator = cur?.dictator ?? '';
+    const lines = opts.showLines();
     for (const p of conn.db.pointer.iter()) {
       const id = p.identity.toHexString();
       const wx = p.x * WORLD_W;
@@ -218,53 +242,58 @@ export function startRenderer(
         gh = { x: wx, y: wy, seen: nowMs };
         ghosts.set(id, gh);
       }
-      gh.x += (wx - gh.x) * (1 - Math.exp(-dt * 12));
-      gh.y += (wy - gh.y) * (1 - Math.exp(-dt * 12));
-      const stale = nowMs - gh.seen > 2500;
+      const k = 1 - Math.exp(-dt * 12);
+      gh.x += (wx - gh.x) * k;
+      gh.y += (wy - gh.y) * k;
       fresh.add(id);
+      const stale = nowMs - gh.seen > 2500;
       const pl = conn.db.player.identity.find(p.identity);
-      const color = pl?.color ?? '#888';
-      g.globalAlpha = stale ? 0.15 : 0.9;
-      if (opts.showLines() && !stale) {
+      const color = pl?.color ?? '#999';
+      if (lines && !stale) {
         g.strokeStyle = color;
-        g.globalAlpha = 0.18;
-        g.lineWidth = 1.5 * px;
+        g.globalAlpha = 0.35;
+        g.lineWidth = 2 * px;
+        g.setLineDash([0.12, 0.1]);
         g.beginPath();
         g.moveTo(rc.x, rc.y);
         g.lineTo(gh.x, gh.y);
         g.stroke();
-        g.globalAlpha = 0.9;
+        g.setLineDash([]);
+        g.globalAlpha = 1;
       }
-      drawArrow(gh.x, gh.y, 0.32, color, px, pl?.team === 1 ? 'square' : 'arrow');
-      if (dictator === id) {
-        g.font = `0.6px system-ui`;
-        g.fillText('👑', gh.x - 0.2, gh.y - 0.25);
-      }
-      if (pl) {
-        g.fillStyle = '#fff';
-        g.globalAlpha = stale ? 0.15 : 0.7;
-        g.font = `${0.26}px system-ui, sans-serif`;
-        g.fillText(pl.name, gh.x + 0.25, gh.y + 0.45);
-      }
+      g.globalAlpha = stale ? 0.25 : 0.95;
+      drawCursorSprite(g, gh.x, gh.y, 0.55, color, !stale);
+      if (dictator === id) blit(g, 'crown', gh.x - 0.05, gh.y - 0.45, 0.04, { shadow: 0.03 });
+      if (pl) nameTag(g, gh.x + 0.32, gh.y + 0.42, pl.name, color, 0.3);
       g.globalAlpha = 1;
     }
     for (const id of ghosts.keys()) if (!fresh.has(id)) ghosts.delete(id);
 
-    // Crowd aggregate target.
+    // Crowd aggregate target marker.
     if (cur && cur.active > 0) {
-      g.strokeStyle = 'rgba(255,255,255,0.35)';
-      g.lineWidth = 2 * px;
+      g.strokeStyle = '#111';
+      g.lineWidth = 3 * px;
       g.beginPath();
-      g.arc(cur.tx, cur.ty, 0.18, 0, Math.PI * 2);
-      g.moveTo(cur.tx - 0.3, cur.ty);
-      g.lineTo(cur.tx + 0.3, cur.ty);
-      g.moveTo(cur.tx, cur.ty - 0.3);
-      g.lineTo(cur.tx, cur.ty + 0.3);
+      g.arc(cur.tx, cur.ty, 0.16, 0, Math.PI * 2);
+      g.moveTo(cur.tx - 0.32, cur.ty);
+      g.lineTo(cur.tx + 0.32, cur.ty);
+      g.moveTo(cur.tx, cur.ty - 0.32);
+      g.lineTo(cur.tx, cur.ty + 0.32);
       g.stroke();
     }
 
-    // The one true cursor.
-    drawArrow(rc.x, rc.y, 0.8, '#ffffff', px, 'arrow', true);
+    // The one true cursor: big, white, jittery when the mob is fighting.
+    const jitter = (cur?.chaos ?? 0) > 0.6 ? (cur!.chaos - 0.6) * 0.15 : 0;
+    drawCursorSprite(g, rc.x + (Math.random() - 0.5) * jitter, rc.y + (Math.random() - 0.5) * jitter, 1.1, '#ffffff');
+
+    // Minesweeper auto-click fuse (last 5 s).
+    if (running && running.row.kind === 'minesweeper') {
+      const next = (running.view.progress as MinesProgress).nextAutoAt;
+      if (next !== undefined) {
+        const left = (next - serverMs) / 1000;
+        if (left > 0 && left <= 5 && serverMs >= running.view.playAt) drawFuse(g, rc.x, rc.y, left, px);
+      }
+    }
 
     // Particles.
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -274,175 +303,43 @@ export function startRenderer(
         particles.splice(i, 1);
         continue;
       }
-      const a = p.life / p.max;
+      const a = Math.min(1, p.life / (p.max * 0.4));
       g.globalAlpha = a;
-      if (p.kind === 'dot') {
-        p.vy += 6 * dt;
+      if (p.kind === 'confetti' || p.kind === 'star') {
+        p.vy += 7 * dt;
+        p.vx *= 1 - dt * 0.8;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
-        g.fillStyle = p.color;
-        g.fillRect(p.x, p.y, p.size, p.size);
+        p.rot += p.vr * dt;
+        if (p.kind === 'star') blit(g, 'star', p.x, p.y, p.size, { center: true });
+        else {
+          g.save();
+          g.translate(p.x, p.y);
+          g.rotate(p.rot);
+          g.fillStyle = p.color;
+          g.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+          g.restore();
+        }
       } else if (p.kind === 'ring') {
         g.strokeStyle = p.color;
-        g.lineWidth = 3 * px;
+        g.lineWidth = 4 * px;
         g.beginPath();
-        g.arc(p.x, p.y, p.size * (1 - a) + 0.1, 0, Math.PI * 2);
+        g.arc(p.x, p.y, p.size * (1 - p.life / p.max) + 0.1, 0, Math.PI * 2);
         g.stroke();
       } else {
         p.y += p.vy * dt;
-        g.fillStyle = p.color;
-        g.font = `bold ${p.size}px system-ui, sans-serif`;
-        g.fillText(p.text ?? '', p.x - p.size, p.y);
+        const pop = 1 + Math.max(0, (p.life - p.max + 0.15) / 0.15) * 0.5;
+        worldText(g, p.text ?? '', p.x, p.y, p.size * pop, { fill: p.color, stroke: '#111', strokeW: p.size * 0.22, align: 'center' });
       }
       g.globalAlpha = 1;
     }
 
-    // Screen-space overlays.
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Screen-space flash.
+    g.setTransform(1, 0, 0, 1, 0, 0);
     if (flash > 0) {
-      g.fillStyle = `rgba(255, 40, 80, ${flash * 0.35})`;
-      g.fillRect(0, 0, cw, ch);
+      g.fillStyle = `rgba(${flashColor}, ${flash * 0.3})`;
+      g.fillRect(0, 0, canvas.width, canvas.height);
       flash = Math.max(0, flash - dt * 2);
-    }
-    drawTopBar(cw, cur?.chaos ?? 0, lvl, t);
-  }
-
-  function drawArrow(x: number, y: number, s: number, color: string, px: number, shape: 'arrow' | 'square', main = false) {
-    g.save();
-    g.translate(x, y);
-    g.beginPath();
-    if (shape === 'square') {
-      g.rect(-s * 0.2, -s * 0.2, s * 0.4, s * 0.4);
-    } else {
-      g.moveTo(0, 0);
-      g.lineTo(0, s);
-      g.lineTo(s * 0.28, s * 0.74);
-      g.lineTo(s * 0.48, s * 1.12);
-      g.lineTo(s * 0.62, s * 1.05);
-      g.lineTo(s * 0.42, s * 0.68);
-      g.lineTo(s * 0.75, s * 0.68);
-      g.closePath();
-    }
-    if (main) {
-      g.shadowColor = 'rgba(255,255,255,0.8)';
-      g.shadowBlur = 20;
-    }
-    g.fillStyle = main ? '#fff' : color;
-    g.fill();
-    g.shadowBlur = 0;
-    g.lineWidth = (main ? 3 : 1.5) * px;
-    g.strokeStyle = main ? '#000' : 'rgba(0,0,0,0.6)';
-    g.stroke();
-    g.restore();
-  }
-
-  function drawLevel(kind: string, p: unknown, prog: unknown, px: number, t: number) {
-    if (kind === 'targets') {
-      const tp = p as TargetsParams;
-      const pr = prog as TargetsProgress;
-      tp.targets.forEach((tg, i) => {
-        const done = i < pr.next;
-        const isNext = i === pr.next;
-        g.globalAlpha = done ? 0.2 : isNext ? 1 : 0.45;
-        g.fillStyle = isNext ? '#ff4d6d' : '#4dabf7';
-        g.beginPath();
-        g.arc(tg.x, tg.y, tp.r * (isNext ? 1 + 0.08 * Math.sin(t / 150) : 0.8), 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = '#fff';
-        g.font = `bold 0.5px system-ui`;
-        g.textAlign = 'center';
-        g.textBaseline = 'middle';
-        g.fillText(String(i + 1), tg.x, tg.y);
-        g.textAlign = 'start';
-        g.textBaseline = 'alphabetic';
-        g.globalAlpha = 1;
-      });
-    } else if (kind === 'maze') {
-      const m = p as MazeParams;
-      const pr = prog as MazeProgress;
-      const tw = WORLD_W / m.cols;
-      const th = WORLD_H / m.rows;
-      for (let r = 0; r < m.rows; r++)
-        for (let c = 0; c < m.cols; c++) {
-          if (m.tiles[r * m.cols + c] === '#') {
-            g.fillStyle = '#3b4a8a';
-            g.fillRect(c * tw, r * th, tw + px, th + px);
-          }
-        }
-      g.fillStyle = '#69db7c';
-      g.fillRect(m.goal.c * tw + tw * 0.15, m.goal.r * th + th * 0.15, tw * 0.7, th * 0.7);
-      g.fillStyle = '#ffd43b';
-      g.globalAlpha = 0.4;
-      g.fillRect(m.start.c * tw + tw * 0.2, m.start.r * th + th * 0.2, tw * 0.6, th * 0.6);
-      g.globalAlpha = 1;
-      g.fillStyle = '#fff';
-      g.font = `bold 0.4px system-ui`;
-      g.fillText(`BONKS ${pr.hits}  (each bonk = back to start)`, 0.2, -0.15);
-    } else if (kind === 'minesweeper') {
-      const m = p as MinesParams;
-      const pr = prog as MinesProgress;
-      const cw = WORLD_W / m.cols;
-      const chh = WORLD_H / m.rows;
-      const colors = ['#888', '#4dabf7', '#69db7c', '#ff4d6d', '#9775fa', '#ff922b', '#3bc9db', '#fff', '#aaa'];
-      for (let r = 0; r < m.rows; r++)
-        for (let c = 0; c < m.cols; c++) {
-          const ch = pr.cells[r * m.cols + c];
-          const x = c * cw;
-          const y = r * chh;
-          g.fillStyle = ch === '#' ? '#2f3a66' : ch === '*' ? '#c92a2a' : '#1c2238';
-          g.fillRect(x + 0.03, y + 0.03, cw - 0.06, chh - 0.06);
-          if (ch !== '#' && ch !== '0') {
-            g.fillStyle = ch === '*' ? '#fff' : colors[Number(ch)] ?? '#fff';
-            g.font = `bold ${chh * 0.55}px system-ui`;
-            g.textAlign = 'center';
-            g.textBaseline = 'middle';
-            g.fillText(ch === '*' ? '💣' : ch, x + cw / 2, y + chh / 2);
-            g.textAlign = 'start';
-            g.textBaseline = 'alphabetic';
-          }
-        }
-      // Hovered cell under the cursor.
-      const hc = Math.floor((rc.x / WORLD_W) * m.cols);
-      const hr = Math.floor((rc.y / WORLD_H) * m.rows);
-      g.strokeStyle = '#ffd43b';
-      g.lineWidth = 3 * px;
-      g.strokeRect(hc * cw, hr * chh, cw, chh);
-      g.fillStyle = '#fff';
-      g.font = `bold 0.4px system-ui`;
-      g.fillText(`LIVES ${pr.lives}/${m.lives}`, 0.2, -0.15);
-    }
-  }
-
-  function drawTopBar(cw: number, chaos: number, lvl: ReturnType<typeof currentLevel>, t: number) {
-    // Chaos meter.
-    const w = Math.min(360, cw * 0.3);
-    g.fillStyle = '#fff';
-    g.font = 'bold 16px system-ui, sans-serif';
-    g.fillText('CHAOS', 16, 26);
-    g.fillStyle = '#222842';
-    g.fillRect(80, 12, w, 18);
-    const hue = 120 - chaos * 120;
-    g.fillStyle = `hsl(${hue}, 90%, 55%)`;
-    const wob = chaos > 0.7 ? Math.sin(t / 40) * 4 : 0;
-    g.fillRect(80, 12 + wob, w * chaos, 18);
-    g.fillStyle = '#fff';
-    g.fillText(chaos > 0.8 ? 'TOTAL ANARCHY' : chaos > 0.55 ? 'ARGUING' : chaos > 0.3 ? 'BICKERING' : 'HIVE MIND', 90 + w, 26);
-
-    // Level + timer.
-    if (lvl) {
-      const r = lvl.row;
-      let label = `${r.kind.toUpperCase()}`;
-      if (r.state === 'running') {
-        const nowUs = (performance.timeOrigin + performance.now()) * 1000 + (clockOffsetUs ?? 0);
-        const left = Math.max(0, (Number(r.deadline.microsSinceUnixEpoch) - nowUs) / 1e6);
-        label += `  ⏱ ${left.toFixed(0)}s`;
-      } else {
-        label += r.state === 'won' ? '  ✅ WON' : r.state === 'lost' ? '  ❌ LOST' : '  ⏭ SKIPPED';
-        label += `  score ${r.score}`;
-      }
-      g.font = 'bold 22px system-ui, sans-serif';
-      const m = g.measureText(label);
-      g.fillText(label, cw - m.width - 16, 28);
     }
   }
 

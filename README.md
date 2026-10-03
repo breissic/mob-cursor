@@ -54,6 +54,7 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 - **Identity-scoped and private rows.** Admin rights, minesweeper mine positions, click votes and per-player behaviour stats live in private tables. The `am_i_admin` view exposes one per-caller bit from the private `admin` table.
 - **Scheduled one-shots.** After a level ends, `advance_schedule` starts the next one 10 s later.
 - **Event tables** for sound and particle effects, with no storage cost.
+- **Fan-out control.** Phones need everyone's ghost cursors, but subscribing to `pointer` costs N phones × N pointers × Hz messages. Instead, the tick packs every fresh pointer into a single `ghost_frame` row (4 bytes per player) at 5 Hz, so each phone gets one small row update. The row isn't rewritten while nobody moves.
 
 ## What actually works
 
@@ -68,6 +69,10 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 | Chaos meter, ghost cursors, tug lines, reducer-calls/sec HUD | ✅ |
 | Levels: targets, maze, minesweeper; auto-advance | ✅ |
 | Leaderboard, awards from per-level stats | ✅ |
+| Party flow: each game runs 3 stages of rising difficulty (moving targets, bigger mazes, more mines), 3-2-1 countdown, results screen, auto-advance | ✅ |
+| Minesweeper auto-click: the server clicks wherever the cursor is after a random 2-30 s, with a 5 s fuse shown on screen | ✅ |
+| Everyone's ghost cursors on phones too, from one packed `ghost_frame` row at 5 Hz (no pointer subscription) | ✅ |
+| "MobOS 95" UI: pixel-art sprite set generated from code (`src/game/sprites.ts`, SVGs in `public/assets/`), lobby, intro and results dialogs | ✅ |
 | Config-driven pointer rate (`pointerHzEffective`), dead-band, heartbeat | ✅ |
 | Bot load-test script + Maincloud measurements | ✅ (results below) |
 | Sound effects, screen shake, confetti, heatmap of cursor path | ✅ |

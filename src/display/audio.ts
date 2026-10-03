@@ -30,6 +30,11 @@ function tone(freq: number, dur: number, type: OscillatorType = 'square', vol = 
 
 let lastVote = 0;
 
+/** Short beeps for the 3-2-1 countdown. */
+export function countdownBeep(final: boolean) {
+  tone(final ? 1046 : 523, final ? 0.35 : 0.12, 'square', 0.09);
+}
+
 export function sfx(kind: string) {
   switch (kind) {
     case 'vote': {
@@ -44,6 +49,10 @@ export function sfx(kind: string) {
     case 'target':
       tone(660, 0.1, 'square', 0.08);
       return setTimeout(() => tone(990, 0.15, 'square', 0.08), 90);
+    case 'autoclick':
+      tone(1400, 0.06, 'square', 0.08);
+      setTimeout(() => tone(1400, 0.06, 'square', 0.08), 90);
+      return setTimeout(() => tone(700, 0.25, 'sawtooth', 0.08, 200), 180);
     case 'reveal':
       return tone(520, 0.08, 'triangle', 0.06);
     case 'wall':

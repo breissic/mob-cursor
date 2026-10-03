@@ -1,19 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { tables, type DbConnection } from '../module_bindings';
-import { useConnState, useRows } from '../lib/stdb';
-import {
-  WORLD_H,
-  WORLD_W,
-  type MazeParams,
-  type MinesParams,
-  type MinesProgress,
-  type TargetsParams,
-  type TargetsProgress,
-} from '../../spacetimedb/src/sim';
+import { useConnState, usePoll, useRows } from '../lib/stdb';
+import { observeClock, serverNowMs } from '../lib/clock';
+import { COLORS, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
+import { drawField, drawLevel, GAME_META, parseLevel, type LevelView } from '../game/draw';
+import { blit, spriteUrl } from '../game/sprites';
+import { Win } from '../ui/Win';
 
 const NAME_KEY = 'mob-cursor/name';
 const DEADBAND = 0.01; // 1% of the pad
 const HEARTBEAT_MS = 1000;
+const SILLY = ['Clicky McClick', 'Sir Hovers', 'Mouse Potato', 'Captain Drag', 'Lord Scroll', 'Doubleclick Dan', 'Cursed Cursor', 'Pixel Pete', 'Hover Hannah', 'Right-Click Rita', 'Tab Goblin', 'Ctrl Freak'];
+
+type LevelRow = { id: bigint; kind: string; state: string; params: string; progress: string; score: number; endedAt?: { microsSinceUnixEpoch: bigint } | null };
 
 export default function Play() {
   const { conn, identity, status } = useConnState();
@@ -26,16 +25,19 @@ export default function Play() {
   });
   const [error, setError] = useState('');
 
-  // Phones subscribe ONLY to the cursor, the running level, config and their own
-  // player row. Never the pointer table (N phones x N pointers x Hz would melt).
+  // Phones never subscribe to the pointer table (N phones x N pointers x Hz).
+  // Everyone's ghosts arrive packed in ONE ghost_frame row at ~5 Hz instead.
   useEffect(() => {
     if (!conn || !identity || status !== 'connected') return;
+    observeClock(conn);
     const sub = conn
       .subscriptionBuilder()
       .subscribe([
         tables.cursor,
         tables.config,
-        tables.level.where(r => r.state.eq('running')),
+        tables.level,
+        tables.ghostFrame,
+        tables.fx.where(r => r.kind.ne('vote')),
         tables.player.where(r => r.identity.eq(identity)),
       ]);
     return () => sub.unsubscribe();
@@ -61,33 +63,49 @@ export default function Play() {
   }
 
   if (status !== 'connected') {
-    return <div className="play-center">{status === 'error' ? 'Could not connect 😵' : 'Connecting…'}</div>;
+    return (
+      <div className="phone-center">
+        <Win title="REMOTE.EXE" color="#ffd23f" className="join-win">
+          <p>{status === 'error' ? 'Could not connect 😵 — refresh to retry.' : 'Dialing up the mob…'}</p>
+        </Win>
+      </div>
+    );
   }
 
   if (!joined) {
     return (
-      <form className="play-center join" onSubmit={join}>
-        <h1>MOB CURSOR</h1>
-        <p>One cursor. Everyone controls it. Nobody agrees.</p>
-        <input
-          autoFocus
-          maxLength={16}
-          placeholder="Your name"
-          value={name}
-          onChange={e => setName(e.target.value)}
-        />
-        <button type="submit">Join the mob</button>
-        {error && <p className="err">{error}</p>}
+      <form className="phone-center" onSubmit={join}>
+        <Win title="SETUP.EXE — Join the mob" color="#ff4fa3" icon={spriteUrl('cursor', '#fff')} className="join-win dialog">
+          <div className="logo">
+            <img src={spriteUrl('cursor', '#ffffff')} alt="" />
+            <span>
+              MOB <span className="c2">CURSOR</span>
+            </span>
+          </div>
+          <p>One cursor. Everyone drives it. Pick a name:</p>
+          <div className="name-row">
+            <input type="text" autoFocus maxLength={16} placeholder="Your name" value={name} onChange={e => setName(e.target.value)} />
+            <button type="button" title="Random name" onClick={() => setName(SILLY[Math.floor(Math.random() * SILLY.length)])}>
+              🎲
+            </button>
+          </div>
+          <button type="submit" className="go">
+            JOIN ▶
+          </button>
+          {error && <p className="err">{error}</p>}
+        </Win>
       </form>
     );
   }
 
-  return <Pad conn={conn!} color={me.color} name={me.name} score={me.score} team={me.team} />;
+  return <Remote conn={conn!} color={me.color} name={me.name} score={me.score} team={me.team} />;
 }
 
-function Pad({ conn, color, name, score, team }: { conn: DbConnection; color: string; name: string; score: number; team: number }) {
+function Remote({ conn, color, name, score, team }: { conn: DbConnection; color: string; name: string; score: number; team: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const finger = useRef<{ x: number; y: number } | null>(null);
+  const tapRings = useRef<{ x: number; y: number; t: number }[]>([]);
   const [sent, setSent] = useState(0);
 
   // Throttled sender: obeys config.pointerHzEffective live, dead-band + heartbeat.
@@ -122,87 +140,123 @@ function Pad({ conn, color, name, score, team }: { conn: DbConnection; color: st
     };
   }, [conn]);
 
-  // Mini map so phone players see where the cursor is without the pointer table.
+  // Haptics + flash on big moments.
+  useEffect(() => {
+    const onFx = (_c: unknown, row: { kind: string }) => {
+      const v: Record<string, number | number[]> = { mine: [90, 40, 90], wall: [60, 30, 60], lose: [200], win: [30, 40, 30, 40, 30], target: 30, autoclick: [20, 30, 60], click: 15 };
+      if (v[row.kind] !== undefined) navigator.vibrate?.(v[row.kind]);
+      if (row.kind === 'mine' || row.kind === 'wall') {
+        wrapRef.current?.classList.remove('flash-mine');
+        void wrapRef.current?.offsetWidth;
+        wrapRef.current?.classList.add('flash-mine');
+      }
+    };
+    conn.db.fx.onInsert(onFx);
+    return () => conn.db.fx.removeOnInsert(onFx);
+  }, [conn]);
+
+  // Mini map: level art + everyone's ghosts + the shared cursor + your finger.
   useEffect(() => {
     const cv = canvasRef.current!;
     const g = cv.getContext('2d')!;
     let raf = 0;
+    let cache: { id: bigint; params: string; progress: string; view: LevelView } | null = null;
+    const rc = { x: WORLD_W / 2, y: WORLD_H / 2 };
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const dpr = window.devicePixelRatio || 1;
-      if (cv.width !== cv.clientWidth * dpr || cv.height !== cv.clientHeight * dpr) {
-        cv.width = cv.clientWidth * dpr;
-        cv.height = cv.clientHeight * dpr;
+      if (cv.width !== Math.round(cv.clientWidth * dpr) || cv.height !== Math.round(cv.clientHeight * dpr)) {
+        cv.width = Math.round(cv.clientWidth * dpr);
+        cv.height = Math.round(cv.clientHeight * dpr);
       }
       const W = cv.width;
       const H = cv.height;
       const sx = W / WORLD_W;
       const sy = H / WORLD_H;
-      g.fillStyle = '#141829';
-      g.fillRect(0, 0, W, H);
-      let lvl = null as ReturnType<typeof conn.db.level.id.find>;
+      const ms = serverNowMs();
+
+      let lvl = null as LevelRow | null;
       for (const l of conn.db.level.iter()) if (!lvl || l.id > lvl.id) lvl = l;
-      if (lvl) {
-        const p = JSON.parse(lvl.params);
-        const pr = JSON.parse(lvl.progress);
-        if (lvl.kind === 'maze') {
-          const m = p as MazeParams;
-          g.fillStyle = '#3b4a8a';
-          for (let r = 0; r < m.rows; r++)
-            for (let c = 0; c < m.cols; c++)
-              if (m.tiles[r * m.cols + c] === '#') g.fillRect((c * W) / m.cols, (r * H) / m.rows, W / m.cols + 1, H / m.rows + 1);
-          g.fillStyle = '#69db7c';
-          g.fillRect((m.goal.c * W) / m.cols, (m.goal.r * H) / m.rows, W / m.cols, H / m.rows);
-        } else if (lvl.kind === 'targets') {
-          const tp = p as TargetsParams;
-          const tg = tp.targets[(pr as TargetsProgress).next];
-          if (tg) {
-            g.fillStyle = '#ff4d6d';
-            g.beginPath();
-            g.arc(tg.x * sx, tg.y * sy, tp.r * sx, 0, Math.PI * 2);
-            g.fill();
-          }
-        } else if (lvl.kind === 'minesweeper') {
-          const m = p as MinesParams;
-          const cells = (pr as MinesProgress).cells;
-          for (let r = 0; r < m.rows; r++)
-            for (let c = 0; c < m.cols; c++) {
-              const ch = cells[r * m.cols + c];
-              g.fillStyle = ch === '#' ? '#2f3a66' : ch === '*' ? '#c92a2a' : '#1c2238';
-              g.fillRect((c * W) / m.cols + 1, (r * H) / m.rows + 1, W / m.cols - 2, H / m.rows - 2);
-            }
-        }
-      }
+      const running = lvl && lvl.state === 'running' ? lvl : null;
+      if (running && (!cache || cache.id !== running.id || cache.params !== running.params || cache.progress !== running.progress))
+        cache = { id: running.id, params: running.params, progress: running.progress, view: parseLevel(running)! };
+
       const cur = conn.db.cursor.id.find(0);
       if (cur) {
-        g.strokeStyle = 'rgba(255,255,255,0.5)';
-        g.beginPath();
-        g.arc(cur.tx * sx, cur.ty * sy, 6 * dpr, 0, Math.PI * 2);
-        g.stroke();
-        g.fillStyle = '#fff';
-        g.beginPath();
-        g.arc(cur.x * sx, cur.y * sy, 10 * dpr, 0, Math.PI * 2);
-        g.fill();
+        rc.x += (cur.x - rc.x) * 0.35;
+        rc.y += (cur.y - rc.y) * 0.35;
+      }
+
+      // World is stretched to fill the pad (pad position == world position).
+      g.setTransform(sx, 0, 0, sy, 0, 0);
+      const px = 1 / Math.min(sx, sy);
+      drawField(g, running ? running.kind : 'lobby', px);
+      if (running && cache) drawLevel(g, cache.view, px, ms, rc, false);
+
+      // Sprites in screen space so they are not stretched.
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      const frame = conn.db.ghostFrame.id.find(0)?.data;
+      if (frame) {
+        for (let i = 0; i + 3 < frame.length; i += 4) {
+          const gx = (frame[i + 2] / 255) * W;
+          const gy = (frame[i + 3] / 255) * H;
+          blit(g, 'cursor', gx, gy, 1.2 * dpr, { tint: COLORS[frame[i]] ?? '#999', alpha: 0.85 });
+          if (frame[i + 1] & 2) blit(g, 'crown', gx - 2 * dpr, gy - 10 * dpr, 0.9 * dpr);
+        }
       }
       const f = finger.current;
+      if (f && cur) {
+        g.strokeStyle = color;
+        g.lineWidth = 3 * dpr;
+        g.setLineDash([6 * dpr, 6 * dpr]);
+        g.beginPath();
+        g.moveTo(rc.x * sx, rc.y * sy);
+        g.lineTo(f.x * W, f.y * H);
+        g.stroke();
+        g.setLineDash([]);
+      }
+      blit(g, 'cursor', rc.x * sx, rc.y * sy, 2.4 * dpr, { tint: '#ffffff', shadow: 3 * dpr });
       if (f) {
         g.fillStyle = color;
+        g.strokeStyle = '#111';
+        g.lineWidth = 3 * dpr;
         g.beginPath();
-        g.arc(f.x * W, f.y * H, 14 * dpr, 0, Math.PI * 2);
+        g.arc(f.x * W, f.y * H, 16 * dpr, 0, Math.PI * 2);
         g.fill();
-        if (cur) {
-          g.strokeStyle = color;
-          g.lineWidth = 2 * dpr;
-          g.beginPath();
-          g.moveTo(cur.x * sx, cur.y * sy);
-          g.lineTo(f.x * W, f.y * H);
-          g.stroke();
-        }
+        g.stroke();
+      }
+      const now = performance.now();
+      tapRings.current = tapRings.current.filter(r => now - r.t < 500);
+      for (const r of tapRings.current) {
+        const k = (now - r.t) / 500;
+        g.strokeStyle = `rgba(17,17,17,${1 - k})`;
+        g.lineWidth = 4 * dpr;
+        g.beginPath();
+        g.arc(r.x * W, r.y * H, (16 + k * 40) * dpr, 0, Math.PI * 2);
+        g.stroke();
       }
     };
     draw();
     return () => cancelAnimationFrame(raf);
   }, [conn, color]);
+
+  // Banners (polled at 4 Hz so React stays out of the frame loop).
+  const banner = usePoll(() => {
+    let lvl = null as LevelRow | null;
+    for (const l of conn.db.level.iter()) if (!lvl || l.id > lvl.id) lvl = l;
+    const now = serverNowMs();
+    if (!lvl) return { text: 'WAITING FOR HOST…', cls: '', game: 'LOBBY' };
+    const meta = JSON.parse(lvl.params) as { playAt?: number; stage?: number; stages?: number };
+    const gm = GAME_META[lvl.kind] ?? GAME_META.lobby;
+    const game = `${gm.exe} · ${meta.stage ?? 1}/${meta.stages ?? 3}`;
+    if (lvl.state === 'running') {
+      const c = Math.ceil(((meta.playAt ?? 0) - now) / 1000);
+      return c > 0 ? { text: String(c), cls: 'count', game } : { text: '', cls: '', game };
+    }
+    const ended = lvl.endedAt ? Number(lvl.endedAt.microsSinceUnixEpoch / 1000n) : 0;
+    if (lvl.state !== 'skipped' && now - ended < 10000) return { text: lvl.state === 'won' ? `CLEAR! +${lvl.score}` : 'FAILED!', cls: '', game };
+    return { text: 'GET READY…', cls: '', game };
+  }, 250);
 
   const down = useRef<{ t: number; x: number; y: number } | null>(null);
   const toNorm = (e: React.PointerEvent) => {
@@ -214,39 +268,56 @@ function Pad({ conn, color, name, score, team }: { conn: DbConnection; color: st
   };
   const click = () => {
     navigator.vibrate?.(15);
+    const f = finger.current;
+    if (f) tapRings.current.push({ ...f, t: performance.now() });
     conn.reducers.click({}).catch(() => {});
   };
 
   return (
-    <div className="pad-wrap">
-      <div className="pad-top">
-        <span className="dot" style={{ background: color }} /> {name}
-        <span className="team">{team === 0 ? 'RED' : 'BLUE'}</span>
-        <b>{score}</b>
-      </div>
-      <canvas
-        ref={canvasRef}
-        className="pad"
-        onPointerDown={e => {
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          const p = toNorm(e);
-          finger.current = p;
-          down.current = { t: performance.now(), ...p };
-        }}
-        onPointerMove={e => {
-          if (e.pointerType === 'mouse' || e.buttons) finger.current = toNorm(e);
-        }}
-        onPointerUp={e => {
-          const p = toNorm(e);
-          const d = down.current;
-          if (d && performance.now() - d.t < 250 && Math.hypot(p.x - d.x, p.y - d.y) < 0.03) click();
-          down.current = null;
-        }}
-      />
+    <div className="phone">
+      <Win
+        title={name}
+        color={color}
+        icon={spriteUrl('cursor', '#ffffff')}
+        className="remote"
+        right={<span className="chip">{team === 0 ? 'RED' : 'BLUE'}</span>}
+      >
+        <div className="remote-info">
+          <span className="swatch" style={{ background: color }} />
+          <span className="game">{banner.game}</span>
+          <span className="score">{score} pts</span>
+        </div>
+        <div className="pad-wrap" ref={wrapRef}>
+          <canvas
+            ref={canvasRef}
+            className="pad"
+            onPointerDown={e => {
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              const p = toNorm(e);
+              finger.current = p;
+              down.current = { t: performance.now(), ...p };
+            }}
+            onPointerMove={e => {
+              if (e.pointerType === 'mouse' || e.buttons) finger.current = toNorm(e);
+            }}
+            onPointerUp={e => {
+              const p = toNorm(e);
+              const d = down.current;
+              if (d && performance.now() - d.t < 250 && Math.hypot(p.x - d.x, p.y - d.y) < 0.03) click();
+              down.current = null;
+            }}
+          />
+          {banner.text && (
+            <div className={`pad-banner ${banner.cls}`} key={banner.text}>
+              {banner.text}
+            </div>
+          )}
+        </div>
+      </Win>
       <button className="click-btn" onClick={click}>
-        CLICK
+        CLICK!
       </button>
-      <div className="pad-foot">tap = click vote · {sent}/s sent</div>
+      <div className="phone-foot">drag = pull the cursor · tap = click vote · {sent}/s</div>
     </div>
   );
 }

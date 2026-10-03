@@ -29,12 +29,22 @@ Small decisions made while building, newest at the bottom of each section.
 - **The event log has a `sample` kind at 1 Hz** (cursor x/y, chaos, active count) for the replay/heatmap. The display excludes samples from its default subscription and pulls them per level only when the heatmap is on.
 - **Awards are computed at level end** from private per-level `player_stats`, which the tick samples at 1 Hz. Awards with zero signal are skipped.
 
+- **Stages**: every game has 3 stages (`STAGE_SPECS` in `sim.ts`). Stage number, count and `playAt` (end of the 3 s countdown, unix ms) live in the `level.params` JSON, so the schema stays unchanged. The flow goes stage 1→3 of a game, then the next game. A stage's score is multiplied by its stage number. The new `admin_start_stage` reducer is added alongside `admin_start_level`; `admin_start_level` was not changed, so CI's `--yes=remote,migrate` publish still goes through.
+- **Countdown**: the tick holds the cursor at the start spot until `playAt`, and clicks registered before then are ignored. The deadline is `playAt + stage seconds`.
+- **Minesweeper auto-click**: `progress.nextAutoAt` is public, and each fire re-rolls it to a random 2-30 s ahead using `ctx.random`. It's public so the display can show a 5 s fuse at the end, but the display never shows the full countdown, which keeps the surprise. `revealCell` now spreads the old progress so the timer survives a reveal.
+- **`ghost_frame` table** (additive): 4 bytes per fresh pointer, `[colorIndex, flags, x, y]`, at 5 Hz. The palette moved to `sim.ts` (`COLORS`) so the server and client agree on the color index.
+
 ## Client
 - **Hash routes** (`#/display`, `#/play`, `#/admin`), so the static host needs no rewrites.
 - **No React re-render per frame**: the canvas reads `conn.db` in rAF. React chrome uses `useRows`, which coalesces table callbacks to at most every 100-500 ms.
 - **Phones subscribe only to** `cursor`, `config`, `level WHERE state='running'` and `player WHERE identity = me`. The phone shows a mini-map from the cursor row, so it never needs the pointer table.
 - **Phone send loop**: a `setTimeout` chain at `config.pointerHzEffective`. It sends only if the pointer moved more than 1% of the pad, or after a 1 s heartbeat, and only while the page is visible.
 - **The QR code points at `VITE_PUBLIC_URL`** if set (useful when the display runs on localhost but phones need a LAN or prod URL). Otherwise it uses the current origin. `?db=` and `?host=` overrides carry over.
+
+- **MobOS 95 look**: each game is an app window, and dialogs handle the intro and results. Fonts are Bungee and VT323 from Google Fonts. Sprites are pixel maps in code, rendered to cached canvases per tint; `scripts/gen-assets.ts` writes the same maps out as SVGs.
+- **Canvas text at world-unit sizes broke** (sub-pixel fonts get clamped or mis-measured), so all world text goes through `worldText()`, which scales the context by 100.
+- **The phone pad stretches the world to fill the pad**, so a pad position maps to the same world position. Sprites are drawn in screen space so they don't stretch.
+- **Server clock estimate** (`lib/clock.ts`) comes from `cursor.lastTickAt`, and countdowns and timers use it, so laptop clock skew doesn't matter.
 
 ## Fun layer
 - **Procedures can make HTTP calls** (`ctx.http.fetch`, beta), so the commentator could live inside the module. I kept it as a separate `worker/`, per the brief. That keeps the API key off the database host and makes it easy to kill.
