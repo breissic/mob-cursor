@@ -3,25 +3,33 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
+    "dev:localdb": "vite --host --mode localdb",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "generate": "cargo run -p gen-bindings -- --out-dir src/module_bindings --module-path spacetimedb && prettier --write src/module_bindings",
-    "spacetime:generate": "spacetime generate --lang typescript --out-dir src/module_bindings --project-path spacetimedb",
-    "spacetime:publish:local": "spacetime publish --project-path server --server local",
-    "spacetime:publish": "spacetime publish --project-path server --server maincloud"
+    "preview": "vite preview --host",
+    "typecheck": "tsc -b && tsc -p spacetimedb --noEmit",
+    "spacetime:generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path spacetimedb -y",
+    "spacetime:build": "spacetime build --module-path spacetimedb",
+    "spacetime:publish:local": "spacetime publish mob-cursor --module-path spacetimedb --server local -y",
+    "spacetime:publish": "spacetime publish mob-cursor-9xp0y --module-path spacetimedb --server maincloud"
   },
   "dependencies": {
-    "spacetimedb": "^2.0.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "spacetimedb": "2.10.2"
   },
   "devDependencies": {
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^5.0.2",
-    "typescript": "~5.6.2",
-    "vite": "^7.1.5"
+    "@types/qrcode": "1.5.5",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "tsx": "4.20.6",
+    "typescript": "5.6.3",
+    "vite": "7.3.6"
   }
 }
