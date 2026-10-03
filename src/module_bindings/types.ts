@@ -128,6 +128,12 @@ export const Fx = __t.object("Fx", {
 });
 export type Fx = __Infer<typeof Fx>;
 
+export const GhostFrame = __t.object("GhostFrame", {
+  id: __t.u32(),
+  data: __t.byteArray(),
+});
+export type GhostFrame = __Infer<typeof GhostFrame>;
+
 export const Level = __t.object("Level", {
   id: __t.u64(),
   kind: __t.string(),

@@ -41,6 +41,7 @@ import AdminSetConfigReducer from "./admin_set_config_reducer";
 import AdminSetPassphraseReducer from "./admin_set_passphrase_reducer";
 import AdminSetRuleReducer from "./admin_set_rule_reducer";
 import AdminStartLevelReducer from "./admin_start_level_reducer";
+import AdminStartStageReducer from "./admin_start_stage_reducer";
 import AdminStopLevelReducer from "./admin_stop_level_reducer";
 import ClickReducer from "./click_reducer";
 import JoinReducer from "./join_reducer";
@@ -57,6 +58,7 @@ import ConfigRow from "./config_table";
 import CursorRow from "./cursor_table";
 import EventLogRow from "./event_log_table";
 import FxRow from "./fx_table";
+import GhostFrameRow from "./ghost_frame_table";
 import LevelRow from "./level_table";
 import PlayerRow from "./player_table";
 import PointerRow from "./pointer_table";
@@ -134,6 +136,17 @@ const tablesSchema = __schema({
     ],
     event: true,
   }, FxRow),
+  ghostFrame: __table({
+    name: 'ghost_frame',
+    indexes: [
+      { accessor: 'id', name: 'ghost_frame_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'ghost_frame_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GhostFrameRow),
   level: __table({
     name: 'level',
     indexes: [
@@ -185,6 +198,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_set_passphrase", AdminSetPassphraseReducer),
   __reducerSchema("admin_set_rule", AdminSetRuleReducer),
   __reducerSchema("admin_start_level", AdminStartLevelReducer),
+  __reducerSchema("admin_start_stage", AdminStartStageReducer),
   __reducerSchema("admin_stop_level", AdminStopLevelReducer),
   __reducerSchema("click", ClickReducer),
   __reducerSchema("join", JoinReducer),

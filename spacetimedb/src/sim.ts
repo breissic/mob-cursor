@@ -9,6 +9,12 @@ export const RULES: Rule[] = ['mean', 'median', 'activity', 'tug', 'dictator'];
 export type LevelKind = 'lobby' | 'targets' | 'maze' | 'minesweeper';
 export const LEVEL_ROTATION: LevelKind[] = ['targets', 'maze', 'minesweeper'];
 
+/** Player palette. Index is sent in ghost_frame, so client and server share it. */
+export const COLORS = [
+  '#ff4d6d', '#4dabf7', '#ffd43b', '#69db7c', '#da77f2', '#ff922b',
+  '#3bc9db', '#f783ac', '#a9e34b', '#9775fa', '#ffa8a8', '#74c0fc',
+];
+
 export type Pt = { id: string; x: number; y: number; w: number; team: number };
 export type Vec = { x: number; y: number };
 
@@ -163,19 +169,69 @@ export function integrate(
 
 export type Rand = () => number;
 
-export type TargetsParams = { targets: { x: number; y: number }[]; r: number };
+// ---------------------------------------------------------------------------
+// Stages: every minigame runs STAGES stages of rising difficulty.
+// ---------------------------------------------------------------------------
+
+export const STAGES = 3;
+/** Seconds of 3-2-1 countdown before a stage goes live (cursor held still). */
+export const COUNTDOWN_S = 3;
+
+/** Common fields merged into every level's params JSON. */
+export type StageMeta = { stage: number; stages: number; playAt: number };
+
+export const STAGE_SPECS = {
+  targets: [
+    { n: 5, r: 0.75, move: 0, secs: 60 },
+    { n: 7, r: 0.6, move: 0.9, secs: 60 },
+    { n: 8, r: 0.5, move: 1.6, secs: 70 },
+  ],
+  maze: [
+    { cw: 6, ch: 3, secs: 90 },
+    { cw: 8, ch: 4, secs: 110 },
+    { cw: 10, ch: 5, secs: 130 },
+  ],
+  minesweeper: [
+    { cols: 9, rows: 5, mines: 6, secs: 150 },
+    { cols: 12, rows: 7, mines: 13, secs: 180 },
+    { cols: 14, rows: 8, mines: 20, secs: 210 },
+  ],
+} as const;
+
+/** Minesweeper auto-click fires after a random delay in this range (ms). */
+export const AUTO_CLICK_MIN_MS = 2000;
+export const AUTO_CLICK_MAX_MS = 30000;
+
+export type TargetsParams = {
+  targets: { x: number; y: number; ph?: number }[];
+  r: number;
+  /** Wobble amplitude in world units (0 = static targets). */
+  move?: number;
+};
 export type TargetsProgress = { next: number };
 
-export function makeTargets(rand: Rand, n = 6): TargetsParams {
-  const targets: { x: number; y: number }[] = [];
+/** Target position at `t` seconds after play starts (same math on server and client). */
+export function targetPos(p: TargetsParams, i: number, t: number): Vec {
+  const tg = p.targets[i];
+  const a = p.move ?? 0;
+  if (!a) return { x: tg.x, y: tg.y };
+  const ph = tg.ph ?? 0;
+  return {
+    x: clamp(tg.x + a * Math.sin(t * 0.9 + ph), 0.6, WORLD_W - 0.6),
+    y: clamp(tg.y + a * 0.7 * Math.cos(t * 0.63 + ph * 1.7), 0.6, WORLD_H - 0.6),
+  };
+}
+
+export function makeTargets(rand: Rand, n = 6, r = 0.6, move = 0): TargetsParams {
+  const targets: { x: number; y: number; ph: number }[] = [];
   let guard = 0;
   while (targets.length < n && guard++ < 500) {
     const p = { x: 1.2 + rand() * (WORLD_W - 2.4), y: 1.2 + rand() * (WORLD_H - 2.4) };
     const prev = targets[targets.length - 1] ?? { x: WORLD_W / 2, y: WORLD_H / 2 };
     // Far from the previous one so the crowd has to travel.
-    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 4.5) targets.push(p);
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 4.5) targets.push({ ...p, ph: rand() * Math.PI * 2 });
   }
-  return { targets, r: 0.6 };
+  return { targets, r, move };
 }
 
 export type MazeParams = {
@@ -260,7 +316,13 @@ export function mazeHit(m: MazeParams, a: Vec, b: Vec): boolean {
 }
 
 export type MinesParams = { cols: number; rows: number; mines: number; lives: number };
-export type MinesProgress = { cells: string; lives: number; firstDone: boolean };
+export type MinesProgress = {
+  cells: string;
+  lives: number;
+  firstDone: boolean;
+  /** Unix ms when the server auto-clicks wherever the cursor is. */
+  nextAutoAt?: number;
+};
 
 export function makeMines(rand: Rand, cols = 12, rows = 7, mines = 12) {
   const n = cols * rows;
@@ -345,7 +407,7 @@ export function revealCell(
   }
   return {
     secret: bits.join(''),
-    prog: { cells: cells.join(''), lives, firstDone: true },
+    prog: { ...prog, cells: cells.join(''), lives, firstDone: true },
     result,
   };
 }

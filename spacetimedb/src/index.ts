@@ -2,8 +2,16 @@ import { ScheduleAt, Timestamp, type Identity } from 'spacetimedb';
 import { SenderError, t, type InferSchema, type ReducerCtx } from 'spacetimedb/server';
 import spacetimedb, { advanceSchedule, tickSchedule } from './schema';
 import {
+  AUTO_CLICK_MAX_MS,
+  COLORS,
+  AUTO_CLICK_MIN_MS,
+  COUNTDOWN_S,
   LEVEL_ROTATION,
   RULES,
+  STAGES,
+  STAGE_SPECS,
+  targetPos,
+  type StageMeta,
   WORLD_H,
   WORLD_W,
   aggregate,
@@ -34,10 +42,7 @@ export default spacetimedb;
 
 type Ctx = ReducerCtx<InferSchema<typeof spacetimedb>>;
 
-const COLORS = [
-  '#ff4d6d', '#4dabf7', '#ffd43b', '#69db7c', '#da77f2', '#ff922b',
-  '#3bc9db', '#f783ac', '#a9e34b', '#9775fa', '#ffa8a8', '#74c0fc',
-];
+
 const MICROS = 1_000_000n;
 
 const now = (ctx: Ctx) => ctx.timestamp.microsSinceUnixEpoch;
@@ -151,9 +156,29 @@ function resetCursorTo(ctx: Ctx, x: number, y: number) {
 // Levels
 // ---------------------------------------------------------------------------
 
-const DURATIONS: Record<LevelKind, number> = { lobby: 0, targets: 60, maze: 120, minesweeper: 180 };
+type PlayKind = Exclude<LevelKind, 'lobby'>;
+const nowMs = (ctx: Ctx) => Number(now(ctx) / 1000n);
+const randMs = (ctx: Ctx) =>
+  AUTO_CLICK_MIN_MS + Math.floor(ctx.random() * (AUTO_CLICK_MAX_MS - AUTO_CLICK_MIN_MS));
 
-function startLevel(ctx: Ctx, kind: LevelKind) {
+function stageOf(l: { params: string }): number {
+  return (JSON.parse(l.params) as Partial<StageMeta>).stage ?? 1;
+}
+function playAtOf(l: { params: string }): number {
+  return (JSON.parse(l.params) as Partial<StageMeta>).playAt ?? 0;
+}
+
+/** Where the cursor waits during the countdown (and respawns in the maze). */
+function startPos(kind: string, params: unknown) {
+  if (kind === 'maze') {
+    const m = params as MazeParams;
+    return tileCenter(m, m.start.c, m.start.r);
+  }
+  return { x: WORLD_W / 2, y: WORLD_H / 2 };
+}
+
+function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
+  stage = Math.max(1, Math.min(STAGES, Math.round(stage)));
   const cur = currentLevel(ctx);
   if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
   for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
@@ -162,33 +187,39 @@ function startLevel(ctx: Ctx, kind: LevelKind) {
   resetStats(ctx);
 
   const rand = () => ctx.random();
-  let params: unknown = {};
-  let progress: unknown = {};
+  const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
+  const meta: StageMeta = { stage, stages: STAGES, playAt };
+  let params: object = {};
+  let progress: object = {};
   let secret: string | null = null;
-  let start = { x: WORLD_W / 2, y: WORLD_H / 2 };
+  let secs = 60;
   if (kind === 'targets') {
-    params = makeTargets(rand);
+    const sp = STAGE_SPECS.targets[stage - 1];
+    params = makeTargets(rand, sp.n, sp.r, sp.move);
     progress = { next: 0 } satisfies TargetsProgress;
+    secs = sp.secs;
   } else if (kind === 'maze') {
-    const m = makeMaze(rand);
-    params = m;
+    const sp = STAGE_SPECS.maze[stage - 1];
+    params = makeMaze(rand, sp.cw, sp.ch);
     progress = { hits: 0, frozenUntil: 0 } satisfies MazeProgress;
-    start = tileCenter(m, m.start.c, m.start.r);
+    secs = sp.secs;
   } else if (kind === 'minesweeper') {
-    const m = makeMines(rand);
+    const sp = STAGE_SPECS.minesweeper[stage - 1];
+    const m = makeMines(rand, sp.cols, sp.rows, sp.mines);
     params = m.params;
-    progress = m.progress;
+    progress = { ...m.progress, nextAutoAt: playAt + randMs(ctx) } satisfies MinesProgress;
     secret = m.secret;
+    secs = sp.secs;
   }
-  const dur = BigInt(DURATIONS[kind]) * MICROS;
+  const start = startPos(kind, params);
   const row = ctx.db.level.insert({
     id: 0n,
     kind,
     state: 'running',
-    params: JSON.stringify(params),
+    params: JSON.stringify({ ...params, ...meta }),
     progress: JSON.stringify(progress),
     startedAt: ctx.timestamp,
-    deadline: ts(now(ctx) + (dur > 0n ? dur : 3600n * MICROS)),
+    deadline: ts(BigInt(playAt) * 1000n + BigInt(secs) * MICROS),
     endedAt: undefined,
     score: 0,
     chaosSum: 0,
@@ -196,13 +227,17 @@ function startLevel(ctx: Ctx, kind: LevelKind) {
   });
   if (secret !== null) ctx.db.levelSecret.insert({ levelId: row.id, data: secret });
   resetCursorTo(ctx, start.x, start.y);
-  log(ctx, 'level_start', '', { kind, levelId: row.id.toString() });
+  log(ctx, 'level_start', '', { kind, stage, levelId: row.id.toString() });
 }
 
-function nextKind(ctx: Ctx): LevelKind {
+/** Party flow: stage 1..STAGES of a game, then the next game. */
+function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } {
   const cur = currentLevel(ctx);
-  const i = cur ? LEVEL_ROTATION.indexOf(cur.kind as LevelKind) : -1;
-  return LEVEL_ROTATION[(i + 1) % LEVEL_ROTATION.length];
+  if (!cur || !LEVEL_ROTATION.includes(cur.kind as PlayKind)) return { kind: LEVEL_ROTATION[0] as PlayKind, stage: 1 };
+  const stage = stageOf(cur);
+  if (stage < STAGES) return { kind: cur.kind as PlayKind, stage: stage + 1 };
+  const i = LEVEL_ROTATION.indexOf(cur.kind as PlayKind);
+  return { kind: LEVEL_ROTATION[(i + 1) % LEVEL_ROTATION.length] as PlayKind, stage: 1 };
 }
 
 function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') {
@@ -213,7 +248,7 @@ function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') 
   const avgChaos = l.ticks > 0 ? l.chaosSum / l.ticks : 1;
   const coop = Math.round(100 * (1 - avgChaos));
   let score = 0;
-  if (state === 'won') score = 100 + Math.round(left * 2) + coop;
+  if (state === 'won') score = (100 + Math.round(left * 2) + coop) * stageOf(l);
   if (state === 'won' && l.kind === 'maze') score = Math.max(25, score - 5 * (JSON.parse(l.progress) as MazeProgress).hits);
   else if (state === 'lost') score = 10;
   ctx.db.level.id.update({ ...l, state, endedAt: ctx.timestamp, score });
@@ -238,6 +273,7 @@ function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') 
   }
   log(ctx, 'level_end', '', {
     kind: l.kind,
+    stage: stageOf(l),
     state,
     score,
     seconds: Math.round(elapsed),
@@ -283,7 +319,7 @@ function giveAwards(ctx: Ctx, levelId: bigint) {
   if (goblin.v > 0) grant('Click Goblin', goblin);
   grant(
     'Moral Support',
-    best(named(s => s.samples - s.activeSamples + 1 / (1 + s.activitySum), v => `was there in spirit for ~${Math.floor(v)}s`))
+    best(named(s => s.samples - s.activeSamples, v => `was there in spirit (idle) for ${v}s`))
   );
 }
 
@@ -430,10 +466,11 @@ export const click = spacetimedb.reducer(ctx => {
   registerClick(ctx, cur.x, cur.y, near.length);
 });
 
-function registerClick(ctx: Ctx, x: number, y: number, votes: number) {
-  fx(ctx, 'click', x, y);
-  log(ctx, 'click', '', { x: +x.toFixed(2), y: +y.toFixed(2), votes });
+function registerClick(ctx: Ctx, x: number, y: number, votes: number, auto = false) {
   const l = currentLevel(ctx);
+  if (l && l.state === 'running' && nowMs(ctx) < playAtOf(l)) return; // still counting down
+  fx(ctx, auto ? 'autoclick' : 'click', x, y);
+  log(ctx, auto ? 'autoclick' : 'click', '', { x: +x.toFixed(2), y: +y.toFixed(2), votes });
   if (!l || l.state !== 'running' || l.kind !== 'minesweeper') return;
   const params = JSON.parse(l.params) as MinesParams;
   const prog = JSON.parse(l.progress) as MinesProgress;
@@ -494,14 +531,21 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   const ch = chaosOf(pts, cur.x, cur.y);
   const chaosSmoothed = cur.chaos + (ch - cur.chaos) * Math.min(1, dt * 3);
 
+  // Countdown: hold the cursor on the start spot until play begins.
+  const countingDown = !!running && Number(tNow / 1000n) < playAtOf(running);
+  if (running && countingDown) {
+    const s = startPos(running.kind, JSON.parse(running.params));
+    body = { x: s.x, y: s.y, vx: 0, vy: 0 };
+  }
+
   // Level rules.
-  if (running) {
+  if (running && !countingDown) {
     let progress = running.progress;
     let outcome: 'won' | 'lost' | null = null;
     if (running.kind === 'targets') {
       const p = JSON.parse(running.params) as TargetsParams;
       const prog = JSON.parse(progress) as TargetsProgress;
-      const tg = p.targets[prog.next];
+      const tg = prog.next < p.targets.length ? targetPos(p, prog.next, (Number(tNow / 1000n) - playAtOf(running)) / 1000) : null;
       if (tg && Math.hypot(body.x - tg.x, body.y - tg.y) <= p.r) {
         prog.next += 1;
         progress = JSON.stringify(prog);
@@ -542,6 +586,7 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       });
     }
     if (outcome) endLevel(ctx, running.id, outcome);
+    else if (running.kind === 'minesweeper') maybeAutoClick(ctx, running.id, body);
   }
 
   const tickNo = cur.tick + 1n;
@@ -558,12 +603,47 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
     dictatorUntil,
   });
 
+  // 5 Hz: compact ghost frame so phones can draw everyone without the pointer table.
+  if (tickNo % 3n === 0n) writeGhostFrame(ctx, pts, dictator);
+
   // 1 Hz: behaviour stats for awards + a replay/heatmap sample.
   if (tickNo % BigInt(cfg.tickHz) === 0n) {
     sampleStats(ctx, pts, body, target);
     log(ctx, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
   }
 });
+
+/** Minesweeper: at a random moment (2-30 s apart) the cursor clicks by itself. */
+function maybeAutoClick(ctx: Ctx, levelId: bigint, body: { x: number; y: number }) {
+  const l = ctx.db.level.id.find(levelId);
+  if (!l || l.state !== 'running') return;
+  const prog = JSON.parse(l.progress) as MinesProgress;
+  const t = nowMs(ctx);
+  if (prog.nextAutoAt === undefined || t < prog.nextAutoAt) return;
+  ctx.db.level.id.update({ ...l, progress: JSON.stringify({ ...prog, nextAutoAt: t + randMs(ctx) }) });
+  registerClick(ctx, body.x, body.y, 0, true);
+}
+
+/**
+ * ghost_frame.data: 4 bytes per fresh pointer [colorIndex, flags, x, y]
+ * flags bit0 = team blue, bit1 = current dictator. x/y quantized to 0..255.
+ */
+function writeGhostFrame(ctx: Ctx, pts: Pt[], dictator: string) {
+  const colorById = new Map<string, number>();
+  for (const pl of ctx.db.player.iter()) if (pl.connected) colorById.set(hex(pl.identity), Math.max(0, COLORS.indexOf(pl.color)));
+  const data = new Uint8Array(pts.length * 4);
+  pts.forEach((p, i) => {
+    data[i * 4] = colorById.get(p.id) ?? 0;
+    data[i * 4 + 1] = (p.team & 1) | (p.id === dictator ? 2 : 0);
+    data[i * 4 + 2] = Math.round(clamp(p.x / WORLD_W, 0, 1) * 255);
+    data[i * 4 + 3] = Math.round(clamp(p.y / WORLD_H, 0, 1) * 255);
+  });
+  const prev = ctx.db.ghostFrame.id.find(0);
+  if (prev) {
+    if (prev.data.length === data.length && prev.data.every((v, i) => v === data[i])) return; // idle room: no write
+    ctx.db.ghostFrame.id.update({ ...prev, data });
+  } else ctx.db.ghostFrame.insert({ id: 0, data });
+}
 
 function sampleStats(ctx: Ctx, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
   const byId = new Map(pts.map(p => [p.id, p]));
@@ -609,7 +689,8 @@ export const auto_advance = spacetimedb.reducer(
     const cur = currentLevel(ctx);
     if (!cur || cur.id !== arg.afterLevelId || cur.state === 'running') return;
     if (!getConfig(ctx).autoAdvance) return;
-    startLevel(ctx, nextKind(ctx));
+    const n = nextUp(ctx);
+    startLevel(ctx, n.kind, n.stage);
   }
 );
 
@@ -685,9 +766,16 @@ export const admin_set_config = spacetimedb.reducer({ key: t.string(), value: t.
 
 export const admin_start_level = spacetimedb.reducer({ kind: t.string() }, (ctx, { kind }) => {
   requireAdmin(ctx);
-  const k = kind === 'next' ? nextKind(ctx) : (kind as LevelKind);
-  if (!LEVEL_ROTATION.includes(k)) throw new SenderError(`unknown level ${kind}`);
-  startLevel(ctx, k);
+  const n = kind === 'next' ? nextUp(ctx) : { kind: kind as PlayKind, stage: 1 };
+  if (!LEVEL_ROTATION.includes(n.kind)) throw new SenderError(`unknown level ${kind}`);
+  startLevel(ctx, n.kind, n.stage);
+});
+
+export const admin_start_stage = spacetimedb.reducer({ kind: t.string(), stage: t.u32() }, (ctx, { kind, stage }) => {
+  requireAdmin(ctx);
+  if (!LEVEL_ROTATION.includes(kind as PlayKind)) throw new SenderError(`unknown level ${kind}`);
+  if (stage < 1 || stage > STAGES) throw new SenderError(`stage must be 1..${STAGES}`);
+  startLevel(ctx, kind as PlayKind, stage);
 });
 
 export const admin_stop_level = spacetimedb.reducer(ctx => {

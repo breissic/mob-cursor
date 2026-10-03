@@ -10,6 +10,8 @@ import {
   makeMines,
   revealCell,
   sha256Hex,
+  targetPos,
+  STAGE_SPECS,
   type Pt,
 } from '../src/sim.ts';
 
@@ -102,4 +104,26 @@ test('minesweeper: three mines loses', () => {
   const mines = [...st.secret].map((b, i) => (b === '1' ? i : -1)).filter(i => i >= 0);
   for (const i of mines.slice(0, 3)) st = revealCell(params, st.prog, st.secret, i % params.cols, Math.floor(i / params.cols));
   assert.equal(st.result, 'lost');
+});
+
+test('revealCell keeps extra progress fields (auto-click timer)', () => {
+  const { params, progress, secret } = makeMines(seeded(5));
+  const res = revealCell(params, { ...progress, nextAutoAt: 12345 }, secret, 0, 0);
+  assert.equal(res.prog.nextAutoAt, 12345);
+});
+
+test('moving targets stay on the field; static targets do not move', () => {
+  const p = { targets: [{ x: 1, y: 1, ph: 0 }, { x: 15, y: 8, ph: 2 }], r: 0.5, move: 1.6 };
+  for (let t = 0; t < 60; t += 0.37)
+    for (let i = 0; i < 2; i++) {
+      const q = targetPos(p, i, t);
+      assert.ok(q.x >= 0.6 && q.x <= 15.4 && q.y >= 0.6 && q.y <= 8.4);
+    }
+  assert.deepEqual(targetPos({ ...p, move: 0 }, 0, 10), { x: 1, y: 1 });
+});
+
+test('stage specs get harder', () => {
+  const m = STAGE_SPECS.minesweeper;
+  assert.ok(m[2].mines > m[1].mines && m[1].mines > m[0].mines);
+  assert.ok(STAGE_SPECS.maze[2].cw > STAGE_SPECS.maze[0].cw);
 });

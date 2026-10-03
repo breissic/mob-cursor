@@ -56,6 +56,18 @@ export const cursor = table(
   }
 );
 
+/**
+ * Single row (id = 0), ~5 Hz: every fresh pointer packed as 4 bytes so phones
+ * can draw all ghosts from ONE row update instead of N pointer rows.
+ */
+export const ghostFrame = table(
+  { public: true },
+  {
+    id: t.u32().primaryKey(),
+    data: t.byteArray(),
+  }
+);
+
 /** Level history; the newest row is the current level. */
 export const level = table(
   { public: true },
@@ -256,6 +268,7 @@ const spacetimedb = schema({
   player,
   pointer,
   cursor,
+  ghostFrame,
   level,
   config,
   eventLog,
