@@ -154,7 +154,7 @@ Open `#/display` on the projector and scan the QR code with phones (`#/play`). I
 
 The client build never needs the module: `src/module_bindings/` is committed, and CI fails if it's stale.
 
-### Admin
+## Admin
 
 `init` records the publisher's identity as admin. To use the admin panel from a browser:
 
@@ -164,7 +164,7 @@ spacetime call mob-cursor-live admin_set_passphrase '"<long passphrase>"' --serv
 
 Then open `#/admin` and enter the passphrase. Only a salted SHA-256 is stored, and every `admin_*` reducer checks `ctx.sender` against the private `admin` table.
 
-### Tests and tools
+## Tests and tools
 
 ```bash
 npm test                                  # sim unit tests (rules, physics, maze, minesweeper, sha256)
