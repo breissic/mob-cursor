@@ -1,37 +1,735 @@
-import { schema, table, t } from 'spacetimedb/server';
+import { ScheduleAt, Timestamp, type Identity } from 'spacetimedb';
+import { SenderError, t, type InferSchema, type ReducerCtx } from 'spacetimedb/server';
+import spacetimedb, { advanceSchedule, tickSchedule } from './schema';
+import {
+  LEVEL_ROTATION,
+  RULES,
+  WORLD_H,
+  WORLD_W,
+  aggregate,
+  cellAt,
+  chaos as chaosOf,
+  clamp,
+  integrate,
+  makeMaze,
+  makeMines,
+  makeTargets,
+  mazeHit,
+  revealCell,
+  sha256Hex,
+  tileAt,
+  tileCenter,
+  type LevelKind,
+  type MazeParams,
+  type MazeProgress,
+  type MinesParams,
+  type MinesProgress,
+  type Pt,
+  type Rule,
+  type TargetsParams,
+  type TargetsProgress,
+} from './sim';
 
-const spacetimedb = schema({
-  person: table(
-    { public: true },
-    {
-      name: t.string(),
-    }
-  ),
-});
 export default spacetimedb;
 
-export const init = spacetimedb.init(_ctx => {
-  // Called when the module is initially published
+type Ctx = ReducerCtx<InferSchema<typeof spacetimedb>>;
+
+const COLORS = [
+  '#ff4d6d', '#4dabf7', '#ffd43b', '#69db7c', '#da77f2', '#ff922b',
+  '#3bc9db', '#f783ac', '#a9e34b', '#9775fa', '#ffa8a8', '#74c0fc',
+];
+const MICROS = 1_000_000n;
+
+const now = (ctx: Ctx) => ctx.timestamp.microsSinceUnixEpoch;
+const ts = (micros: bigint) => new Timestamp(micros);
+const hex = (id: Identity) => id.toHexString();
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function getConfig(ctx: Ctx) {
+  const c = ctx.db.config.id.find(0);
+  if (!c) throw new Error('config row missing');
+  return c;
+}
+
+function getCursor(ctx: Ctx) {
+  const c = ctx.db.cursor.id.find(0);
+  if (!c) throw new Error('cursor row missing');
+  return c;
+}
+
+function currentLevel(ctx: Ctx) {
+  let best: ReturnType<typeof ctx.db.level.id.find> = null;
+  for (const l of ctx.db.level.iter()) if (!best || l.id > best.id) best = l;
+  return best;
+}
+
+function log(ctx: Ctx, kind: string, who: string, payload: unknown) {
+  const lvl = currentLevel(ctx);
+  ctx.db.eventLog.insert({
+    id: 0n,
+    at: ctx.timestamp,
+    kind,
+    levelId: lvl?.id ?? 0n,
+    who,
+    payload: JSON.stringify(payload ?? {}),
+  });
+}
+
+function fx(ctx: Ctx, kind: string, x: number, y: number, who = '') {
+  ctx.db.fx.insert({ kind, x, y, who });
+}
+
+function isAdmin(ctx: Ctx) {
+  return ctx.db.admin.identity.find(ctx.sender) !== undefined;
+}
+
+function requireAdmin(ctx: Ctx) {
+  if (!isAdmin(ctx)) throw new SenderError('not an admin');
+}
+
+function connectedPlayerCount(ctx: Ctx) {
+  let n = 0;
+  for (const p of ctx.db.player.iter()) if (p.connected) n++;
+  return n;
+}
+
+/** Energy lever: shrink the per-client pointer rate as the room grows. */
+function recomputePointerHz(ctx: Ctx) {
+  const c = getConfig(ctx);
+  const n = Math.max(1, connectedPlayerCount(ctx));
+  const eff = Math.round(clamp(Math.min(c.pointerHz, c.pointerBudget / n), 1, 30) * 10) / 10;
+  if (eff !== c.pointerHzEffective) ctx.db.config.id.update({ ...c, pointerHzEffective: eff });
+}
+
+/** Tick runs only while at least one player is connected: zero idle burn. */
+function syncTickSchedule(ctx: Ctx) {
+  const want = connectedPlayerCount(ctx) > 0 && !getConfig(ctx).paused;
+  const rows = [...ctx.db.tickSchedule.iter()];
+  if (want && rows.length === 0) {
+    const hz = getConfig(ctx).tickHz;
+    ctx.db.tickSchedule.insert({
+      scheduledId: 0n,
+      scheduledAt: ScheduleAt.interval(MICROS / BigInt(hz)),
+    });
+    // Reset dt so the first tick after a pause does not jump.
+    ctx.db.cursor.id.update({ ...getCursor(ctx), lastTickAt: ctx.timestamp });
+  } else if (!want) {
+    for (const r of rows) ctx.db.tickSchedule.scheduledId.delete(r.scheduledId);
+  }
+}
+
+function refreshPresence(ctx: Ctx, identity: Identity) {
+  const p = ctx.db.player.identity.find(identity);
+  if (!p) return;
+  const online = [...ctx.db.session.identity.filter(identity)].length > 0;
+  if (p.connected !== online) ctx.db.player.identity.update({ ...p, connected: online });
+  if (!online) {
+    ctx.db.pointer.identity.delete(identity);
+    ctx.db.clickVote.identity.delete(identity);
+  }
+}
+
+function sanitizeName(raw: string, ctx: Ctx) {
+  // eslint-disable-next-line no-control-regex
+  const s = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 16);
+  return s || `Anon${ctx.random.integerInRange(1000, 9999)}`;
+}
+
+function resetStats(ctx: Ctx) {
+  for (const s of [...ctx.db.playerStats.iter()]) ctx.db.playerStats.identity.delete(s.identity);
+}
+
+function resetCursorTo(ctx: Ctx, x: number, y: number) {
+  const c = getCursor(ctx);
+  ctx.db.cursor.id.update({ ...c, x, y, vx: 0, vy: 0, tx: x, ty: y });
+}
+
+// ---------------------------------------------------------------------------
+// Levels
+// ---------------------------------------------------------------------------
+
+const DURATIONS: Record<LevelKind, number> = { lobby: 0, targets: 60, maze: 120, minesweeper: 180 };
+
+function startLevel(ctx: Ctx, kind: LevelKind) {
+  const cur = currentLevel(ctx);
+  if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
+  for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
+  for (const a of [...ctx.db.advanceSchedule.iter()])
+    ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+  resetStats(ctx);
+
+  const rand = () => ctx.random();
+  let params: unknown = {};
+  let progress: unknown = {};
+  let secret: string | null = null;
+  let start = { x: WORLD_W / 2, y: WORLD_H / 2 };
+  if (kind === 'targets') {
+    params = makeTargets(rand);
+    progress = { next: 0 } satisfies TargetsProgress;
+  } else if (kind === 'maze') {
+    const m = makeMaze(rand);
+    params = m;
+    progress = { hits: 0, frozenUntil: 0 } satisfies MazeProgress;
+    start = tileCenter(m, m.start.c, m.start.r);
+  } else if (kind === 'minesweeper') {
+    const m = makeMines(rand);
+    params = m.params;
+    progress = m.progress;
+    secret = m.secret;
+  }
+  const dur = BigInt(DURATIONS[kind]) * MICROS;
+  const row = ctx.db.level.insert({
+    id: 0n,
+    kind,
+    state: 'running',
+    params: JSON.stringify(params),
+    progress: JSON.stringify(progress),
+    startedAt: ctx.timestamp,
+    deadline: ts(now(ctx) + (dur > 0n ? dur : 3600n * MICROS)),
+    endedAt: undefined,
+    score: 0,
+    chaosSum: 0,
+    ticks: 0,
+  });
+  if (secret !== null) ctx.db.levelSecret.insert({ levelId: row.id, data: secret });
+  resetCursorTo(ctx, start.x, start.y);
+  log(ctx, 'level_start', '', { kind, levelId: row.id.toString() });
+}
+
+function nextKind(ctx: Ctx): LevelKind {
+  const cur = currentLevel(ctx);
+  const i = cur ? LEVEL_ROTATION.indexOf(cur.kind as LevelKind) : -1;
+  return LEVEL_ROTATION[(i + 1) % LEVEL_ROTATION.length];
+}
+
+function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') {
+  const l = ctx.db.level.id.find(levelId);
+  if (!l || l.state !== 'running') return;
+  const elapsed = Number(now(ctx) - l.startedAt.microsSinceUnixEpoch) / 1e6;
+  const left = Math.max(0, Number(l.deadline.microsSinceUnixEpoch - now(ctx)) / 1e6);
+  const avgChaos = l.ticks > 0 ? l.chaosSum / l.ticks : 1;
+  const coop = Math.round(100 * (1 - avgChaos));
+  let score = 0;
+  if (state === 'won') score = 100 + Math.round(left * 2) + coop;
+  if (state === 'won' && l.kind === 'maze') score = Math.max(25, score - 5 * (JSON.parse(l.progress) as MazeProgress).hits);
+  else if (state === 'lost') score = 10;
+  ctx.db.level.id.update({ ...l, state, endedAt: ctx.timestamp, score });
+  ctx.db.levelSecret.levelId.delete(levelId);
+
+  if (state !== 'skipped') {
+    // Everyone who actually showed up for this level shares the team score.
+    for (const s of ctx.db.playerStats.iter()) {
+      const p = ctx.db.player.identity.find(s.identity);
+      if (p && s.activeSamples > 0) ctx.db.player.identity.update({ ...p, score: p.score + score });
+    }
+    giveAwards(ctx, levelId);
+    const c = getCursor(ctx);
+    fx(ctx, state === 'won' ? 'win' : 'lose', c.x, c.y);
+    if (getConfig(ctx).autoAdvance) {
+      ctx.db.advanceSchedule.insert({
+        scheduledId: 0n,
+        scheduledAt: ScheduleAt.time(now(ctx) + 10n * MICROS),
+        afterLevelId: levelId,
+      });
+    }
+  }
+  log(ctx, 'level_end', '', {
+    kind: l.kind,
+    state,
+    score,
+    seconds: Math.round(elapsed),
+    coop,
+  });
+}
+
+function giveAwards(ctx: Ctx, levelId: bigint) {
+  type S = { id: Identity; name: string; v: number; detail: string };
+  const rows = [...ctx.db.playerStats.iter()].filter(s => s.samples > 0);
+  if (rows.length === 0) return;
+  const named = (pick: (s: (typeof rows)[number]) => number, detail: (v: number) => string): S[] =>
+    rows.map(s => {
+      const p = ctx.db.player.identity.find(s.identity);
+      const v = pick(s);
+      return { id: s.identity, name: p?.name ?? '???', v, detail: detail(v) };
+    });
+  const best = (xs: S[]) => xs.reduce((a, b) => (b.v > a.v ? b : a));
+  const grant = (title: string, s: S) => {
+    if (!(s.v > 0)) return; // nobody earned it
+    ctx.db.award.insert({ id: 0n, levelId, title, who: hex(s.id), name: s.name, detail: s.detail });
+    log(ctx, 'award', hex(s.id), { title, name: s.name, detail: s.detail });
+  };
+
+  const active = rows.filter(s => s.activeSamples > 0);
+  if (active.length > 0) {
+    const ratio = (a: number, b: number) => (a + b > 0 ? a / (a + b) : 0);
+    grant(
+      'Most Disagreeable Player',
+      best(named(s => ratio(s.disagree, s.agree), v => `pulled against the mob ${Math.round(v * 100)}% of the time`).filter(x => active.some(a => a.identity.isEqual(x.id))))
+    );
+    grant(
+      'Biggest Troll',
+      best(named(s => (s.activeSamples ? s.distSum / s.activeSamples : 0), v => `parked ${v.toFixed(1)} units from the cursor on average`).filter(x => active.some(a => a.identity.isEqual(x.id))))
+    );
+    grant(
+      'MVP (Most Valuable Puppet)',
+      best(named(s => ratio(s.agree, s.disagree), v => `agreed with the mob ${Math.round(v * 100)}% of the time`).filter(x => active.some(a => a.identity.isEqual(x.id))))
+    );
+  }
+  const clickers = named(s => s.clicks, v => `${v} click votes`);
+  const goblin = best(clickers);
+  if (goblin.v > 0) grant('Click Goblin', goblin);
+  grant(
+    'Moral Support',
+    best(named(s => s.samples - s.activeSamples + 1 / (1 + s.activitySum), v => `was there in spirit for ~${Math.floor(v)}s`))
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+export const init = spacetimedb.init(ctx => {
+  ctx.db.admin.insert({ identity: ctx.sender, grantedAt: ctx.timestamp });
+  ctx.db.config.insert({
+    id: 0,
+    rule: 'mean',
+    pointerHz: 8,
+    pointerBudget: 400,
+    pointerHzEffective: 8,
+    tickHz: 15,
+    gain: 6,
+    damping: 4.5,
+    maxSpeed: 7,
+    influenceCap: 0.25,
+    quorumMin: 1,
+    quorumFrac: 0.3,
+    quorumRadius: 1.2,
+    quorumWindowMs: 1500,
+    maxPlayers: 150,
+    freshMs: 2000,
+    dictatorSecs: 5,
+    autoAdvance: true,
+    paused: false,
+  });
+  ctx.db.cursor.insert({
+    id: 0,
+    x: WORLD_W / 2,
+    y: WORLD_H / 2,
+    vx: 0,
+    vy: 0,
+    tx: WORLD_W / 2,
+    ty: WORLD_H / 2,
+    chaos: 0,
+    active: 0,
+    tick: 0n,
+    lastTickAt: ctx.timestamp,
+    dictator: '',
+    dictatorUntil: ctx.timestamp,
+  });
 });
 
-export const onConnect = spacetimedb.clientConnected(_ctx => {
-  // Called every time a new client connects
+export const onConnect = spacetimedb.clientConnected(ctx => {
+  if (ctx.connectionId) ctx.db.session.insert({ connectionId: ctx.connectionId, identity: ctx.sender });
+  refreshPresence(ctx, ctx.sender);
+  recomputePointerHz(ctx);
+  syncTickSchedule(ctx);
 });
 
-export const onDisconnect = spacetimedb.clientDisconnected(_ctx => {
-  // Called every time a client disconnects
+export const onDisconnect = spacetimedb.clientDisconnected(ctx => {
+  if (ctx.connectionId) ctx.db.session.connectionId.delete(ctx.connectionId);
+  const before = ctx.db.player.identity.find(ctx.sender);
+  refreshPresence(ctx, ctx.sender);
+  const after = ctx.db.player.identity.find(ctx.sender);
+  if (before?.connected && after && !after.connected) log(ctx, 'leave', hex(ctx.sender), { name: after.name });
+  recomputePointerHz(ctx);
+  syncTickSchedule(ctx);
 });
 
-export const add = spacetimedb.reducer(
-  { name: t.string() },
-  (ctx, { name }) => {
-    ctx.db.person.insert({ name });
+// ---------------------------------------------------------------------------
+// Player reducers
+// ---------------------------------------------------------------------------
+
+export const join = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) => {
+  const ban = ctx.db.banned.identity.find(ctx.sender);
+  if (ban && ban.until.microsSinceUnixEpoch > now(ctx)) throw new SenderError('you were kicked; try again soon');
+  const existing = ctx.db.player.identity.find(ctx.sender);
+  const clean = sanitizeName(name, ctx);
+  if (existing) {
+    ctx.db.player.identity.update({ ...existing, name: clean, connected: true });
+  } else {
+    const cfg = getConfig(ctx);
+    if (connectedPlayerCount(ctx) >= cfg.maxPlayers) throw new SenderError('room is full');
+    let n = 0;
+    const teamCount = [0, 0];
+    for (const p of ctx.db.player.iter()) {
+      n++;
+      if (p.connected) teamCount[p.team]++;
+    }
+    ctx.db.player.insert({
+      identity: ctx.sender,
+      name: clean,
+      color: COLORS[n % COLORS.length],
+      team: teamCount[0] <= teamCount[1] ? 0 : 1,
+      score: 0,
+      connected: true,
+      joinedAt: ctx.timestamp,
+    });
+  }
+  log(ctx, 'join', hex(ctx.sender), { name: clean });
+  recomputePointerHz(ctx);
+  syncTickSchedule(ctx);
+});
+
+export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx, { x, y }) => {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new SenderError('bad coordinates');
+  const p = ctx.db.player.identity.find(ctx.sender);
+  if (!p || !p.connected) throw new SenderError('join first');
+  const cx = clamp(x, 0, 1);
+  const cy = clamp(y, 0, 1);
+  const prev = ctx.db.pointer.identity.find(ctx.sender);
+  if (!prev) {
+    ctx.db.pointer.insert({ identity: ctx.sender, x: cx, y: cy, activity: 0, updatedAt: ctx.timestamp });
+    return;
+  }
+  const dtUs = now(ctx) - prev.updatedAt.microsSinceUnixEpoch;
+  // Safety-net rate limit at 2x the advertised rate; the real lever is the client throttle.
+  const minGapUs = BigInt(Math.floor(1e6 / (getConfig(ctx).pointerHzEffective * 2)));
+  if (dtUs < minGapUs) return;
+  const decay = Math.exp(-Number(dtUs) / 1.5e6);
+  const activity = prev.activity * decay + Math.hypot(cx - prev.x, cy - prev.y);
+  ctx.db.pointer.identity.update({ ...prev, x: cx, y: cy, activity, updatedAt: ctx.timestamp });
+});
+
+export const click = spacetimedb.reducer(ctx => {
+  const p = ctx.db.player.identity.find(ctx.sender);
+  if (!p || !p.connected) throw new SenderError('join first');
+  const cfg = getConfig(ctx);
+  const cur = getCursor(ctx);
+  const prev = ctx.db.clickVote.identity.find(ctx.sender);
+  if (prev && now(ctx) - prev.at.microsSinceUnixEpoch < 250_000n) return;
+  const vote = { identity: ctx.sender, x: cur.x, y: cur.y, at: ctx.timestamp };
+  if (prev) ctx.db.clickVote.identity.update(vote);
+  else ctx.db.clickVote.insert(vote);
+  const st = ctx.db.playerStats.identity.find(ctx.sender);
+  if (st) ctx.db.playerStats.identity.update({ ...st, clicks: st.clicks + 1 });
+  fx(ctx, 'vote', cur.x, cur.y, hex(ctx.sender));
+
+  // Quorum: enough recent votes near the current cursor position.
+  const windowUs = BigInt(cfg.quorumWindowMs) * 1000n;
+  const near = [...ctx.db.clickVote.iter()].filter(
+    v =>
+      now(ctx) - v.at.microsSinceUnixEpoch <= windowUs &&
+      Math.hypot(v.x - cur.x, v.y - cur.y) <= cfg.quorumRadius
+  );
+  const need = Math.max(cfg.quorumMin, Math.ceil(cfg.quorumFrac * Math.max(1, cur.active)));
+  if (near.length < need) return;
+  for (const v of near) ctx.db.clickVote.identity.delete(v.identity);
+  registerClick(ctx, cur.x, cur.y, near.length);
+});
+
+function registerClick(ctx: Ctx, x: number, y: number, votes: number) {
+  fx(ctx, 'click', x, y);
+  log(ctx, 'click', '', { x: +x.toFixed(2), y: +y.toFixed(2), votes });
+  const l = currentLevel(ctx);
+  if (!l || l.state !== 'running' || l.kind !== 'minesweeper') return;
+  const params = JSON.parse(l.params) as MinesParams;
+  const prog = JSON.parse(l.progress) as MinesProgress;
+  const sec = ctx.db.levelSecret.levelId.find(l.id);
+  if (!sec) return;
+  const { c, r } = cellAt(params, x, y);
+  const res = revealCell(params, prog, sec.data, c, r);
+  if (res.result === 'noop') return;
+  ctx.db.levelSecret.levelId.update({ ...sec, data: res.secret });
+  ctx.db.level.id.update({ ...l, progress: JSON.stringify(res.prog) });
+  if (res.result === 'mine' || res.result === 'lost') {
+    fx(ctx, 'mine', x, y);
+    log(ctx, 'mine', '', { c, r, lives: res.prog.lives });
+  } else fx(ctx, 'reveal', x, y);
+  if (res.result === 'won') endLevel(ctx, l.id, 'won');
+  if (res.result === 'lost') endLevel(ctx, l.id, 'lost');
+}
+
+// ---------------------------------------------------------------------------
+// Tick (scheduled, private)
+// ---------------------------------------------------------------------------
+
+export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tickSchedule.rowType }, ctx => {
+  const cfg = getConfig(ctx);
+  const cur = getCursor(ctx);
+  const tNow = now(ctx);
+  const dt = clamp(Number(tNow - cur.lastTickAt.microsSinceUnixEpoch) / 1e6, 0, 0.2);
+  const freshUs = BigInt(cfg.freshMs) * 1000n;
+
+  const pts: Pt[] = [];
+  for (const ptr of ctx.db.pointer.iter()) {
+    if (tNow - ptr.updatedAt.microsSinceUnixEpoch > freshUs) continue;
+    const pl = ctx.db.player.identity.find(ptr.identity);
+    if (!pl || !pl.connected) continue;
+    pts.push({ id: hex(ptr.identity), x: ptr.x * WORLD_W, y: ptr.y * WORLD_H, w: ptr.activity, team: pl.team });
+  }
+
+  // Rotating dictator: one random fresh player rules for a few seconds.
+  let dictator = cur.dictator;
+  let dictatorUntil = cur.dictatorUntil;
+  if (cfg.rule === 'dictator' && pts.length > 0) {
+    const stillThere = pts.some(p => p.id === dictator);
+    if (!stillThere || tNow >= dictatorUntil.microsSinceUnixEpoch) {
+      const pick = pts[ctx.random.integerInRange(0, pts.length - 1)];
+      dictator = pick.id;
+      dictatorUntil = ts(tNow + BigInt(Math.round(cfg.dictatorSecs * 1e6)));
+      const pl = [...ctx.db.player.iter()].find(p => hex(p.identity) === pick.id);
+      log(ctx, 'dictator', pick.id, { name: pl?.name ?? '?' });
+      fx(ctx, 'dictator', pick.x, pick.y, pick.id);
+    }
+  } else if (cfg.rule !== 'dictator') dictator = '';
+
+  const target = aggregate(cfg.rule as Rule, pts, cfg.influenceCap, dictator);
+  const lvl = currentLevel(ctx);
+  const running = lvl && lvl.state === 'running' ? lvl : undefined;
+  const before = { x: cur.x, y: cur.y };
+  let body = integrate(cur, target, dt, cfg.gain, cfg.damping, cfg.maxSpeed);
+  const ch = chaosOf(pts, cur.x, cur.y);
+  const chaosSmoothed = cur.chaos + (ch - cur.chaos) * Math.min(1, dt * 3);
+
+  // Level rules.
+  if (running) {
+    let progress = running.progress;
+    let outcome: 'won' | 'lost' | null = null;
+    if (running.kind === 'targets') {
+      const p = JSON.parse(running.params) as TargetsParams;
+      const prog = JSON.parse(progress) as TargetsProgress;
+      const tg = p.targets[prog.next];
+      if (tg && Math.hypot(body.x - tg.x, body.y - tg.y) <= p.r) {
+        prog.next += 1;
+        progress = JSON.stringify(prog);
+        fx(ctx, 'target', tg.x, tg.y);
+        log(ctx, 'target', '', { n: prog.next, of: p.targets.length });
+        if (prog.next >= p.targets.length) outcome = 'won';
+      }
+    } else if (running.kind === 'maze') {
+      const m = JSON.parse(running.params) as MazeParams;
+      const prog = JSON.parse(progress) as MazeProgress;
+      const s = tileCenter(m, m.start.c, m.start.r);
+      const nowMs = Number(tNow / 1000n);
+      if (nowMs < prog.frozenUntil) {
+        // Just respawned: hold at the start so the mob can regroup.
+        body = { x: s.x, y: s.y, vx: 0, vy: 0 };
+      } else if (mazeHit(m, before, body)) {
+        prog.hits += 1;
+        prog.frozenUntil = nowMs + 700;
+        progress = JSON.stringify(prog);
+        fx(ctx, 'wall', body.x, body.y);
+        log(ctx, 'wall', '', { hits: prog.hits });
+        body = { x: s.x, y: s.y, vx: 0, vy: 0 };
+      } else {
+        const tl = tileAt(m, body.x, body.y);
+        if (tl.c === m.goal.c && tl.r === m.goal.r) outcome = 'won';
+      }
+    }
+    if (!outcome && tNow >= running.deadline.microsSinceUnixEpoch) outcome = 'lost';
+    // The level row is broadcast to every phone, so only write it when progress
+    // changes or once a second (cooperation sample), never every tick.
+    const sampleNow = (cur.tick + 1n) % BigInt(cfg.tickHz) === 0n;
+    if (progress !== running.progress || sampleNow || outcome) {
+      ctx.db.level.id.update({
+        ...running,
+        progress,
+        chaosSum: running.chaosSum + (sampleNow ? chaosSmoothed : 0),
+        ticks: running.ticks + (sampleNow ? 1 : 0),
+      });
+    }
+    if (outcome) endLevel(ctx, running.id, outcome);
+  }
+
+  const tickNo = cur.tick + 1n;
+  ctx.db.cursor.id.update({
+    ...cur,
+    ...body,
+    tx: target?.x ?? cur.tx,
+    ty: target?.y ?? cur.ty,
+    chaos: chaosSmoothed,
+    active: pts.length,
+    tick: tickNo,
+    lastTickAt: ctx.timestamp,
+    dictator,
+    dictatorUntil,
+  });
+
+  // 1 Hz: behaviour stats for awards + a replay/heatmap sample.
+  if (tickNo % BigInt(cfg.tickHz) === 0n) {
+    sampleStats(ctx, pts, body, target);
+    log(ctx, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
+  }
+});
+
+function sampleStats(ctx: Ctx, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
+  const byId = new Map(pts.map(p => [p.id, p]));
+  const tdx = target ? target.x - body.x : 0;
+  const tdy = target ? target.y - body.y : 0;
+  const tl = Math.hypot(tdx, tdy);
+  for (const pl of ctx.db.player.iter()) {
+    if (!pl.connected) continue;
+    const p = byId.get(hex(pl.identity));
+    const st = ctx.db.playerStats.identity.find(pl.identity) ?? {
+      identity: pl.identity,
+      samples: 0,
+      activeSamples: 0,
+      agree: 0,
+      disagree: 0,
+      distSum: 0,
+      activitySum: 0,
+      clicks: 0,
+    };
+    const next = { ...st, samples: st.samples + 1 };
+    if (p) {
+      next.activeSamples += 1;
+      const dx = p.x - body.x;
+      const dy = p.y - body.y;
+      const d = Math.hypot(dx, dy);
+      next.distSum += d;
+      next.activitySum += p.w;
+      if (tl > 0.2 && d > 0.3) {
+        const dot = (dx * tdx + dy * tdy) / (d * tl);
+        if (dot > 0.5) next.agree += 1;
+        else if (dot < -0.2) next.disagree += 1;
+      }
+    }
+    if (ctx.db.playerStats.identity.find(pl.identity)) ctx.db.playerStats.identity.update(next);
+    else ctx.db.playerStats.insert(next);
+  }
+}
+
+export const auto_advance = spacetimedb.reducer(
+  { onSchedule: advanceSchedule },
+  { arg: advanceSchedule.rowType },
+  (ctx, { arg }) => {
+    const cur = currentLevel(ctx);
+    if (!cur || cur.id !== arg.afterLevelId || cur.state === 'running') return;
+    if (!getConfig(ctx).autoAdvance) return;
+    startLevel(ctx, nextKind(ctx));
   }
 );
 
-export const sayHello = spacetimedb.reducer(ctx => {
-  for (const person of ctx.db.person.iter()) {
-    console.info(`Hello, ${person.name}!`);
+// ---------------------------------------------------------------------------
+// Admin (all checks server-side)
+// ---------------------------------------------------------------------------
+
+/** Owner (or existing admin) sets the passphrase other devices use to claim admin. */
+export const admin_set_passphrase = spacetimedb.reducer({ passphrase: t.string() }, (ctx, { passphrase }) => {
+  requireAdmin(ctx);
+  if (passphrase.length < 8) throw new SenderError('passphrase must be at least 8 characters');
+  const salt = sha256Hex(`${now(ctx)}:${ctx.random()}`).slice(0, 16);
+  const row = { id: 0, salt, hash: sha256Hex(`${salt}:${passphrase}`) };
+  if (ctx.db.adminSecret.id.find(0)) ctx.db.adminSecret.id.update(row);
+  else ctx.db.adminSecret.insert(row);
+});
+
+export const admin_claim = spacetimedb.reducer({ passphrase: t.string() }, (ctx, { passphrase }) => {
+  const sec = ctx.db.adminSecret.id.find(0);
+  if (!sec || sha256Hex(`${sec.salt}:${passphrase}`) !== sec.hash) throw new SenderError('wrong passphrase');
+  if (!isAdmin(ctx)) ctx.db.admin.insert({ identity: ctx.sender, grantedAt: ctx.timestamp });
+});
+
+/** Lets the admin UI know whether this identity is an admin (public read of a private table). */
+export const amIAdmin = spacetimedb.view({ public: true }, t.array(t.object('AdminFlag', { yes: t.bool() })), ctx =>
+  ctx.db.admin.identity.find(ctx.sender) ? [{ yes: true }] : []
+);
+
+export const admin_set_rule = spacetimedb.reducer({ rule: t.string() }, (ctx, { rule }) => {
+  requireAdmin(ctx);
+  if (!RULES.includes(rule as Rule)) throw new SenderError(`unknown rule ${rule}`);
+  ctx.db.config.id.update({ ...getConfig(ctx), rule });
+  log(ctx, 'rule', '', { rule });
+});
+
+const NUMERIC_KEYS: Record<string, [number, number]> = {
+  pointerHz: [1, 30],
+  pointerBudget: [10, 5000],
+  tickHz: [5, 30],
+  gain: [0.5, 40],
+  damping: [0, 30],
+  maxSpeed: [0.5, 30],
+  influenceCap: [0.01, 1],
+  quorumMin: [1, 200],
+  quorumFrac: [0, 1],
+  quorumRadius: [0.1, 10],
+  quorumWindowMs: [100, 10000],
+  maxPlayers: [1, 1000],
+  freshMs: [250, 10000],
+  dictatorSecs: [1, 60],
+};
+const INT_KEYS = new Set(['tickHz', 'quorumMin', 'quorumWindowMs', 'maxPlayers', 'freshMs']);
+
+export const admin_set_config = spacetimedb.reducer({ key: t.string(), value: t.f64() }, (ctx, { key, value }) => {
+  requireAdmin(ctx);
+  const c = getConfig(ctx);
+  if (key === 'autoAdvance' || key === 'paused') {
+    ctx.db.config.id.update({ ...c, [key]: value !== 0 });
+  } else {
+    const range = NUMERIC_KEYS[key];
+    if (!range || !Number.isFinite(value)) throw new SenderError(`bad config key ${key}`);
+    let v = clamp(value, range[0], range[1]);
+    if (INT_KEYS.has(key)) v = Math.round(v);
+    ctx.db.config.id.update({ ...c, [key]: v });
   }
-  console.info('Hello, World!');
+  if (key === 'tickHz' || key === 'paused') {
+    // Re-arm the interval at the new rate.
+    for (const r of [...ctx.db.tickSchedule.iter()]) ctx.db.tickSchedule.scheduledId.delete(r.scheduledId);
+  }
+  recomputePointerHz(ctx);
+  syncTickSchedule(ctx);
+});
+
+export const admin_start_level = spacetimedb.reducer({ kind: t.string() }, (ctx, { kind }) => {
+  requireAdmin(ctx);
+  const k = kind === 'next' ? nextKind(ctx) : (kind as LevelKind);
+  if (!LEVEL_ROTATION.includes(k)) throw new SenderError(`unknown level ${kind}`);
+  startLevel(ctx, k);
+});
+
+export const admin_stop_level = spacetimedb.reducer(ctx => {
+  requireAdmin(ctx);
+  const l = currentLevel(ctx);
+  if (l && l.state === 'running') endLevel(ctx, l.id, 'skipped');
+  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+});
+
+export const admin_kick = spacetimedb.reducer({ who: t.identity() }, (ctx, { who }) => {
+  requireAdmin(ctx);
+  const p = ctx.db.player.identity.find(who);
+  ctx.db.player.identity.delete(who);
+  ctx.db.pointer.identity.delete(who);
+  ctx.db.clickVote.identity.delete(who);
+  ctx.db.playerStats.identity.delete(who);
+  const until = ts(now(ctx) + 120n * MICROS);
+  if (ctx.db.banned.identity.find(who)) ctx.db.banned.identity.update({ identity: who, until });
+  else ctx.db.banned.insert({ identity: who, until });
+  log(ctx, 'kick', hex(who), { name: p?.name ?? '?' });
+  recomputePointerHz(ctx);
+  syncTickSchedule(ctx);
+});
+
+export const admin_reset_round = spacetimedb.reducer(ctx => {
+  requireAdmin(ctx);
+  const l = currentLevel(ctx);
+  if (l && l.state === 'running') endLevel(ctx, l.id, 'skipped');
+  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+  for (const p of [...ctx.db.player.iter()]) ctx.db.player.identity.update({ ...p, score: 0 });
+  for (const a of [...ctx.db.award.iter()]) ctx.db.award.id.delete(a.id);
+  for (const lv of [...ctx.db.level.iter()]) ctx.db.level.id.delete(lv.id);
+  for (const s of [...ctx.db.levelSecret.iter()]) ctx.db.levelSecret.levelId.delete(s.levelId);
+  resetStats(ctx);
+  resetCursorTo(ctx, WORLD_W / 2, WORLD_H / 2);
+  log(ctx, 'round_reset', '', {});
+});
+
+/** Written by the LLM commentator worker (which claims admin with the passphrase). */
+export const post_commentary = spacetimedb.reducer({ text: t.string() }, (ctx, { text }) => {
+  requireAdmin(ctx);
+  const clean = text.trim().slice(0, 280);
+  if (!clean) return;
+  ctx.db.commentary.insert({ id: 0n, at: ctx.timestamp, levelId: currentLevel(ctx)?.id ?? 0n, text: clean });
 });

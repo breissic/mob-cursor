@@ -8,9 +8,188 @@ import {
   t as __t,
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
-} from 'spacetimedb';
+} from "spacetimedb";
 
-export const Person = __t.object('Person', {
-  name: __t.string(),
+export const Admin = __t.object("Admin", {
+  identity: __t.identity(),
+  grantedAt: __t.timestamp(),
 });
-export type Person = __Infer<typeof Person>;
+export type Admin = __Infer<typeof Admin>;
+
+export const AdminFlag = __t.object("AdminFlag", {
+  yes: __t.bool(),
+});
+export type AdminFlag = __Infer<typeof AdminFlag>;
+
+export const AdminSecret = __t.object("AdminSecret", {
+  id: __t.u32(),
+  salt: __t.string(),
+  hash: __t.string(),
+});
+export type AdminSecret = __Infer<typeof AdminSecret>;
+
+export const AdvanceSchedule = __t.object("AdvanceSchedule", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+  afterLevelId: __t.u64(),
+});
+export type AdvanceSchedule = __Infer<typeof AdvanceSchedule>;
+
+export const AmIAdmin = __t.object("AmIAdmin", {});
+export type AmIAdmin = __Infer<typeof AmIAdmin>;
+
+export const Award = __t.object("Award", {
+  id: __t.u64(),
+  levelId: __t.u64(),
+  title: __t.string(),
+  who: __t.string(),
+  name: __t.string(),
+  detail: __t.string(),
+});
+export type Award = __Infer<typeof Award>;
+
+export const Banned = __t.object("Banned", {
+  identity: __t.identity(),
+  until: __t.timestamp(),
+});
+export type Banned = __Infer<typeof Banned>;
+
+export const ClickVote = __t.object("ClickVote", {
+  identity: __t.identity(),
+  x: __t.f64(),
+  y: __t.f64(),
+  at: __t.timestamp(),
+});
+export type ClickVote = __Infer<typeof ClickVote>;
+
+export const Commentary = __t.object("Commentary", {
+  id: __t.u64(),
+  at: __t.timestamp(),
+  levelId: __t.u64(),
+  text: __t.string(),
+});
+export type Commentary = __Infer<typeof Commentary>;
+
+export const Config = __t.object("Config", {
+  id: __t.u32(),
+  rule: __t.string(),
+  pointerHz: __t.f64(),
+  pointerBudget: __t.f64(),
+  pointerHzEffective: __t.f64(),
+  tickHz: __t.u32(),
+  gain: __t.f64(),
+  damping: __t.f64(),
+  maxSpeed: __t.f64(),
+  influenceCap: __t.f64(),
+  quorumMin: __t.u32(),
+  quorumFrac: __t.f64(),
+  quorumRadius: __t.f64(),
+  quorumWindowMs: __t.u32(),
+  maxPlayers: __t.u32(),
+  freshMs: __t.u32(),
+  dictatorSecs: __t.f64(),
+  autoAdvance: __t.bool(),
+  paused: __t.bool(),
+});
+export type Config = __Infer<typeof Config>;
+
+export const Cursor = __t.object("Cursor", {
+  id: __t.u32(),
+  x: __t.f64(),
+  y: __t.f64(),
+  vx: __t.f64(),
+  vy: __t.f64(),
+  tx: __t.f64(),
+  ty: __t.f64(),
+  chaos: __t.f64(),
+  active: __t.u32(),
+  tick: __t.u64(),
+  lastTickAt: __t.timestamp(),
+  dictator: __t.string(),
+  dictatorUntil: __t.timestamp(),
+});
+export type Cursor = __Infer<typeof Cursor>;
+
+export const EventLog = __t.object("EventLog", {
+  id: __t.u64(),
+  at: __t.timestamp(),
+  kind: __t.string(),
+  levelId: __t.u64(),
+  who: __t.string(),
+  payload: __t.string(),
+});
+export type EventLog = __Infer<typeof EventLog>;
+
+export const Fx = __t.object("Fx", {
+  kind: __t.string(),
+  x: __t.f64(),
+  y: __t.f64(),
+  who: __t.string(),
+});
+export type Fx = __Infer<typeof Fx>;
+
+export const Level = __t.object("Level", {
+  id: __t.u64(),
+  kind: __t.string(),
+  state: __t.string(),
+  params: __t.string(),
+  progress: __t.string(),
+  startedAt: __t.timestamp(),
+  deadline: __t.timestamp(),
+  endedAt: __t.option(__t.timestamp()),
+  score: __t.i32(),
+  chaosSum: __t.f64(),
+  ticks: __t.u32(),
+});
+export type Level = __Infer<typeof Level>;
+
+export const LevelSecret = __t.object("LevelSecret", {
+  levelId: __t.u64(),
+  data: __t.string(),
+});
+export type LevelSecret = __Infer<typeof LevelSecret>;
+
+export const Player = __t.object("Player", {
+  identity: __t.identity(),
+  name: __t.string(),
+  color: __t.string(),
+  team: __t.u8(),
+  score: __t.i32(),
+  connected: __t.bool(),
+  joinedAt: __t.timestamp(),
+});
+export type Player = __Infer<typeof Player>;
+
+export const PlayerStats = __t.object("PlayerStats", {
+  identity: __t.identity(),
+  samples: __t.u32(),
+  activeSamples: __t.u32(),
+  agree: __t.u32(),
+  disagree: __t.u32(),
+  distSum: __t.f64(),
+  activitySum: __t.f64(),
+  clicks: __t.u32(),
+});
+export type PlayerStats = __Infer<typeof PlayerStats>;
+
+export const Pointer = __t.object("Pointer", {
+  identity: __t.identity(),
+  x: __t.f32(),
+  y: __t.f32(),
+  activity: __t.f32(),
+  updatedAt: __t.timestamp(),
+});
+export type Pointer = __Infer<typeof Pointer>;
+
+export const Session = __t.object("Session", {
+  connectionId: __t.connectionId(),
+  identity: __t.identity(),
+});
+export type Session = __Infer<typeof Session>;
+
+export const TickSchedule = __t.object("TickSchedule", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type TickSchedule = __Infer<typeof TickSchedule>;
+

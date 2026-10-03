@@ -1,8 +1,11 @@
 {
   "dev": {
-    "run": "npm run dev"
+    "run": "npm run dev:localdb"
   },
   "server": "maincloud",
   "module-path": "./spacetimedb",
-  "database": "mob-cursor-9xp0y"
+  "database": "mob-cursor-live",
+  "generate": [
+    { "language": "typescript", "out-dir": "./src/module_bindings" }
+  ]
 }

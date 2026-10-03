@@ -3,11 +3,32 @@
 
 /* eslint-disable */
 /* tslint:disable */
-import { type Infer as __Infer } from 'spacetimedb';
+import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
-import AddReducer from '../add_reducer';
-import SayHelloReducer from '../say_hello_reducer';
+import AdminClaimReducer from "../admin_claim_reducer";
+import AdminKickReducer from "../admin_kick_reducer";
+import AdminResetRoundReducer from "../admin_reset_round_reducer";
+import AdminSetConfigReducer from "../admin_set_config_reducer";
+import AdminSetPassphraseReducer from "../admin_set_passphrase_reducer";
+import AdminSetRuleReducer from "../admin_set_rule_reducer";
+import AdminStartLevelReducer from "../admin_start_level_reducer";
+import AdminStopLevelReducer from "../admin_stop_level_reducer";
+import ClickReducer from "../click_reducer";
+import JoinReducer from "../join_reducer";
+import PostCommentaryReducer from "../post_commentary_reducer";
+import SetPointerReducer from "../set_pointer_reducer";
 
-export type AddParams = __Infer<typeof AddReducer>;
-export type SayHelloParams = __Infer<typeof SayHelloReducer>;
+export type AdminClaimParams = __Infer<typeof AdminClaimReducer>;
+export type AdminKickParams = __Infer<typeof AdminKickReducer>;
+export type AdminResetRoundParams = __Infer<typeof AdminResetRoundReducer>;
+export type AdminSetConfigParams = __Infer<typeof AdminSetConfigReducer>;
+export type AdminSetPassphraseParams = __Infer<typeof AdminSetPassphraseReducer>;
+export type AdminSetRuleParams = __Infer<typeof AdminSetRuleReducer>;
+export type AdminStartLevelParams = __Infer<typeof AdminStartLevelReducer>;
+export type AdminStopLevelParams = __Infer<typeof AdminStopLevelReducer>;
+export type ClickParams = __Infer<typeof ClickReducer>;
+export type JoinParams = __Infer<typeof JoinReducer>;
+export type PostCommentaryParams = __Infer<typeof PostCommentaryReducer>;
+export type SetPointerParams = __Infer<typeof SetPointerReducer>;
+

@@ -1,42 +1,48 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
-import { Identity } from 'spacetimedb';
-import { SpacetimeDBProvider } from 'spacetimedb/react';
-import { DbConnection, ErrorContext } from './module_bindings/index.ts';
+import { connect } from './lib/stdb';
+import Display from './routes/Display';
+import Play from './routes/Play';
+import Admin from './routes/Admin';
+import './style.css';
 
-const HOST = import.meta.env.VITE_SPACETIMEDB_HOST ?? 'ws://localhost:3000';
-const DB_NAME = import.meta.env.VITE_SPACETIMEDB_DB_NAME ?? 'react-ts';
-const TOKEN_KEY = `${HOST}/${DB_NAME}/auth_token`;
+// Hash routes so the static host needs no SPA rewrite rules.
+function useHashRoute() {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const on = () => setHash(location.hash);
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
+  return hash.replace(/^#\/?/, '').split('?')[0];
+}
 
-const onConnect = (_conn: DbConnection, identity: Identity, token: string) => {
-  localStorage.setItem(TOKEN_KEY, token);
-  console.log(
-    'Connected to SpacetimeDB with identity:',
-    identity.toHexString()
+function Home() {
+  return (
+    <div className="play-center home">
+      <h1>MOB CURSOR</h1>
+      <p>One shared cursor. Everyone pulls. Chaos ensues.</p>
+      <a href="#/display">📽 Display (projector)</a>
+      <a href="#/play">📱 Play</a>
+      <a href="#/admin">🛠 Admin</a>
+    </div>
   );
-};
+}
 
-const onDisconnect = () => {
-  console.log('Disconnected from SpacetimeDB');
-};
+function App() {
+  const route = useHashRoute();
+  useEffect(() => {
+    document.body.dataset.route = route || 'home';
+  }, [route]);
+  if (route === 'display') return <Display />;
+  if (route === 'play') return <Play />;
+  if (route === 'admin') return <Admin />;
+  return <Home />;
+}
 
-const onConnectError = (_ctx: ErrorContext, err: Error) => {
-  console.log('Error connecting to SpacetimeDB:', err);
-};
-
-const connectionBuilder = DbConnection.builder()
-  .withUri(HOST)
-  .withDatabaseName(DB_NAME)
-  .withToken(localStorage.getItem(TOKEN_KEY) || undefined)
-  .onConnect(onConnect)
-  .onDisconnect(onDisconnect)
-  .onConnectError(onConnectError);
-
+void connect();
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <SpacetimeDBProvider connectionBuilder={connectionBuilder}>
-      <App />
-    </SpacetimeDBProvider>
+    <App />
   </StrictMode>
 );
