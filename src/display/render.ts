@@ -228,6 +228,9 @@ export function startRenderer(
       rc = smoother.step(dt, phys, running ? cursorHoldUntilMs(running.view) : 0);
     }
 
+    // Debug hook (read by scripts/e2e checks): what we draw vs what the server says.
+    (window as unknown as { __mob?: unknown }).__mob = { rc: { ...rc }, cur: cur ? { x: cur.x, y: cur.y, tick: Number(cur.tick) } : null, serverMs };
+
     if (shown) drawLevel(g, shown.view, px, serverMs, rc);
 
     // Ghost cursors: everyone's pull, with a faint tug line to the shared cursor.

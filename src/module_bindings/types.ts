@@ -134,6 +134,12 @@ export const GhostFrame = __t.object("GhostFrame", {
 });
 export type GhostFrame = __Infer<typeof GhostFrame>;
 
+export const Idle = __t.object("Idle", {
+  identity: __t.identity(),
+  since: __t.timestamp(),
+});
+export type Idle = __Infer<typeof Idle>;
+
 export const Level = __t.object("Level", {
   id: __t.u64(),
   kind: __t.string(),

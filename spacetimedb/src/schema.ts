@@ -213,6 +213,19 @@ export const pointerRate = table(
   }
 );
 
+/**
+ * Players with no live pointer, and since when. A phone that locks without a
+ * clean disconnect stays "connected" forever; after IDLE_AWAY_S here the tick
+ * marks the player as gone (they auto-rejoin when the phone wakes up).
+ */
+export const idle = table(
+  {},
+  {
+    identity: t.identity().primaryKey(),
+    since: t.timestamp(),
+  }
+);
+
 /** Kicked identities and when they may rejoin. */
 export const banned = table(
   {},
@@ -291,6 +304,7 @@ const spacetimedb = schema({
   adminSecret,
   session,
   pointerRate,
+  idle,
   banned,
   clickVote,
   playerStats,

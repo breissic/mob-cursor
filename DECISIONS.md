@@ -42,9 +42,15 @@ Small decisions made while building, newest at the bottom of each section.
 - **Minesweeper is one life**: a bomb explodes and ends the stage immediately, and every mine is revealed (`'m'` cells). Before this a bomb cost one of 3 lives, which players read as "a bomb did nothing, then it failed at some random later time". Auto-click delay is now 0-30 s.
 - **The board stays on screen after a stage ends**: the display keeps drawing the finished level, and the results dialog waits 1.5 s so the room sees the win or explosion first.
 
+- **Paused levels resume fairly**: the tick stops when nobody is connected, but stage deadlines are wall-clock times, so a stage running when the room emptied used to fail the instant someone came back. In production, a maze "lost" 37 minutes after it started. When the tick re-arms, `resumeLevel` moves the running level's `playAt`, deadline and minesweeper auto-click by the pause. A pause over 2 s also gets a fresh 3-2-1 countdown, and a vote resumes the same way.
+- **Idle players count as gone**: the new private `idle` table records when a player last had a live pointer. After 60 s of nothing, the tick sets `connected = false`, which drops them from the leaderboard, the online count and the lobby. A locked phone that never disconnects therefore drops off. Any later `set_pointer` on a live connection brings them back, and the phone page also rejoins automatically when it becomes visible again.
+- **The ghost frame is cleared when the room empties**, so phones don't show a stale ghost snapshot when the next player arrives.
+
 ## Client
 - **Hash routes** (`#/display`, `#/play`, `#/admin`), so the static host needs no rewrites.
 - **No React re-render per frame**: the canvas reads `conn.db` in rAF. React chrome uses `useRows`, which coalesces table callbacks to at most every 100-500 ms.
+- **The finger marker is a ring drawn under the shared cursor**: with the snappier physics from PR #1, the cursor settles right on your finger, and the old filled dot hid it.
+- **`window.__mob` debug hook** on the display exposes the drawn cursor next to the server's, which the e2e probe uses.
 - **The phone has no CLICK button**: taps on the pad only send `click` during minesweeper, the only game where clicks do anything. Elsewhere no reducer call is spent.
 - **Phones subscribe only to** `cursor`, `config`, `level WHERE state='running'` and `player WHERE identity = me`. The phone shows a mini-map from the cursor row, so it never needs the pointer table.
 - **Phone send loop**: leading-edge throttle at `config.pointerHzEffective`. A move sends at once if a full interval has passed, otherwise a trailing send fires at the end of the interval. Dead-band 0.4% of the pad, 1 s heartbeat, only while the page is visible.

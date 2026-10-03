@@ -129,10 +129,81 @@ function syncTickSchedule(ctx: Ctx) {
       scheduledId: 0n,
       scheduledAt: ScheduleAt.interval(MICROS / BigInt(hz)),
     });
+    const cur = getCursor(ctx);
+    resumeLevel(ctx, now(ctx) - cur.lastTickAt.microsSinceUnixEpoch);
     // Reset dt so the first tick after a pause does not jump.
     ctx.db.cursor.id.update({ ...getCursor(ctx), lastTickAt: ctx.timestamp });
   } else if (!want) {
     for (const r of rows) ctx.db.tickSchedule.scheduledId.delete(r.scheduledId);
+    // Nobody left to draw: clear the phones' ghost frame so stale ghosts don't flash on return.
+    const gf = ctx.db.ghostFrame.id.find(0);
+    if (gf && gf.data.length > 1) ctx.db.ghostFrame.id.update({ ...gf, data: packGhosts([]) });
+  }
+}
+
+/**
+ * The tick stops while nobody is connected (or the host pauses), but level
+ * deadlines are wall-clock times. Without this, a stage that was running when
+ * the room emptied "fails" the instant the tick comes back. Long pauses get a
+ * fresh 3-2-1 countdown; short ones (re-arming after a tickHz change) just shift.
+ */
+function resumeLevel(ctx: Ctx, pausedUs: bigint) {
+  const l = currentLevel(ctx);
+  if (!l || l.state !== 'running' || pausedUs <= 0n) return;
+  const params = JSON.parse(l.params) as StageMeta & Record<string, unknown>;
+  const lastTickUs = now(ctx) - pausedUs;
+  // Time the stage had left when the tick stopped (a stage started while paused has its full time).
+  const sinceStart = l.deadline.microsSinceUnixEpoch - l.startedAt.microsSinceUnixEpoch;
+  const sincePause = l.deadline.microsSinceUnixEpoch - lastTickUs;
+  const remainingUs = sincePause < sinceStart ? sincePause : sinceStart;
+  const fresh = pausedUs > 2n * MICROS;
+  const playAt = fresh ? nowMs(ctx) + COUNTDOWN_S * 1000 : (params.playAt ?? 0) + Number(pausedUs / 1000n);
+  const deadlineUs = fresh
+    ? BigInt(playAt) * 1000n + (remainingUs > 10n * MICROS ? remainingUs : 10n * MICROS)
+    : l.deadline.microsSinceUnixEpoch + pausedUs;
+  let progress = l.progress;
+  if (l.kind === 'minesweeper') {
+    const pr = JSON.parse(l.progress) as MinesProgress;
+    progress = JSON.stringify({ ...pr, nextAutoAt: playAt + randMs(ctx) });
+  }
+  ctx.db.level.id.update({ ...l, params: JSON.stringify({ ...params, playAt }), progress, deadline: ts(deadlineUs) });
+  if (fresh) {
+    const s = startPos(l.kind, params);
+    resetCursorTo(ctx, s.x, s.y);
+    log(ctx, 'level_resume', '', { kind: l.kind, pausedS: Number(pausedUs / MICROS) });
+  }
+}
+
+/** Seconds without any pointer input before a still-"connected" player is treated as gone. */
+const IDLE_AWAY_S = 60n;
+
+function markIdle(ctx: Ctx, identity: Identity, since: Timestamp) {
+  const row = { identity, since };
+  if (ctx.db.idle.identity.find(identity)) ctx.db.idle.identity.update(row);
+  else ctx.db.idle.insert(row);
+}
+
+/** 1 Hz: players idle for IDLE_AWAY_S are marked gone (connected = false). */
+function sweepIdle(ctx: Ctx, tNow: bigint) {
+  let changed = false;
+  for (const row of [...ctx.db.idle.iter()]) {
+    const p = ctx.db.player.identity.find(row.identity);
+    if (!p || !p.connected) {
+      ctx.db.idle.identity.delete(row.identity);
+      continue;
+    }
+    if (tNow - row.since.microsSinceUnixEpoch < IDLE_AWAY_S * MICROS) continue;
+    ctx.db.player.identity.update({ ...p, connected: false });
+    ctx.db.pointer.identity.delete(row.identity);
+    ctx.db.pointerRate.identity.delete(row.identity);
+    ctx.db.clickVote.identity.delete(row.identity);
+    ctx.db.idle.identity.delete(row.identity);
+    log(ctx, 'leave', hex(row.identity), { name: p.name, reason: 'idle' });
+    changed = true;
+  }
+  if (changed) {
+    recomputePointerHz(ctx);
+    syncTickSchedule(ctx);
   }
 }
 
@@ -143,6 +214,7 @@ function refreshPresence(ctx: Ctx, identity: Identity) {
   if (p.connected !== online) ctx.db.player.identity.update({ ...p, connected: online });
   if (!online) {
     ctx.db.pointer.identity.delete(identity);
+    ctx.db.idle.identity.delete(identity);
     ctx.db.pointerRate.identity.delete(identity);
     ctx.db.clickVote.identity.delete(identity);
   }
@@ -479,6 +551,7 @@ export const join = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) =>
       joinedAt: ctx.timestamp,
     });
   }
+  if (!ctx.db.pointer.identity.find(ctx.sender)) markIdle(ctx, ctx.sender, ctx.timestamp);
   log(ctx, 'join', hex(ctx.sender), { name: clean });
   recomputePointerHz(ctx);
   syncTickSchedule(ctx);
@@ -487,7 +560,15 @@ export const join = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) =>
 export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx, { x, y }) => {
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new SenderError('bad coordinates');
   const p = ctx.db.player.identity.find(ctx.sender);
-  if (!p || !p.connected) throw new SenderError('join first');
+  if (!p) throw new SenderError('join first');
+  if (!p.connected) {
+    // Marked gone for idling, but this connection is alive: welcome back.
+    if ([...ctx.db.session.identity.filter(ctx.sender)].length === 0) throw new SenderError('join first');
+    ctx.db.player.identity.update({ ...p, connected: true });
+    log(ctx, 'join', hex(ctx.sender), { name: p.name, reason: 'back' });
+    recomputePointerHz(ctx);
+    syncTickSchedule(ctx);
+  }
   const cx = clamp(x, 0, 1);
   const cy = clamp(y, 0, 1);
   // Safety-net rate limit (GCRA) at 2x the advertised rate with a burst of a few
@@ -504,6 +585,7 @@ export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx,
   const prev = ctx.db.pointer.identity.find(ctx.sender);
   if (!prev) {
     ctx.db.pointer.insert({ identity: ctx.sender, x: cx, y: cy, activity: 0, updatedAt: ctx.timestamp });
+    ctx.db.idle.identity.delete(ctx.sender);
     return;
   }
   const dtUs = tNow - prev.updatedAt.microsSinceUnixEpoch;
@@ -690,6 +772,7 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   if (tickNo % BigInt(cfg.tickHz) === 0n) {
     sampleStats(ctx, pts, body, target);
     gcStalePointers(ctx, tNow);
+    sweepIdle(ctx, tNow);
     log(ctx, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
   }
 });
@@ -736,7 +819,10 @@ function writeGhostFrame(ctx: Ctx, pts: Pt[], dictator: string) {
 const POINTER_GC_US = 10_000_000n;
 function gcStalePointers(ctx: Ctx, tNow: bigint) {
   for (const p of [...ctx.db.pointer.iter()])
-    if (tNow - p.updatedAt.microsSinceUnixEpoch > POINTER_GC_US) ctx.db.pointer.identity.delete(p.identity);
+    if (tNow - p.updatedAt.microsSinceUnixEpoch > POINTER_GC_US) {
+      ctx.db.pointer.identity.delete(p.identity);
+      markIdle(ctx, p.identity, p.updatedAt);
+    }
 }
 
 function sampleStats(ctx: Ctx, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
@@ -885,6 +971,7 @@ export const admin_kick = spacetimedb.reducer({ who: t.identity() }, (ctx, { who
   ctx.db.player.identity.delete(who);
   ctx.db.pointer.identity.delete(who);
   ctx.db.pointerRate.identity.delete(who);
+  ctx.db.idle.identity.delete(who);
   ctx.db.clickVote.identity.delete(who);
   ctx.db.playerStats.identity.delete(who);
   const until = ts(now(ctx) + 120n * MICROS);

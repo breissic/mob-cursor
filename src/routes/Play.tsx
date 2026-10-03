@@ -9,6 +9,7 @@ import { blit, spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
 
 const NAME_KEY = 'mob-cursor/name';
+const JOINED_KEY = 'mob-cursor/joined';
 const DEADBAND = 0.004; // 0.4% of the pad
 const HEARTBEAT_MS = 1000;
 /** ghost_frame is written every 3rd tick; ghosts glide to each frame over this long. */
@@ -49,6 +50,40 @@ export default function Play() {
   const me = useRows(c => c.db.player, 200).find(p => identity && p.identity.isEqual(identity));
   const joined = !!me && me.connected;
 
+  useEffect(() => {
+    if (!joined) return;
+    try {
+      localStorage.setItem(JOINED_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }, [joined]);
+
+  // Locked phones get marked "gone" after a minute idle. When this page comes
+  // back (unlock / tab switch / reload), quietly rejoin with the same name.
+  const meRef = useRef(me);
+  meRef.current = me;
+  useEffect(() => {
+    if (!conn || status !== 'connected') return;
+    let tried = false;
+    const rejoin = () => {
+      const m = meRef.current;
+      if (!m || m.connected || document.visibilityState !== 'visible') return;
+      if (localStorage.getItem(JOINED_KEY) !== '1') return;
+      conn.reducers.join({ name: m.name }).catch(() => {});
+    };
+    const firstLoad = window.setInterval(() => {
+      if (tried || !meRef.current) return;
+      tried = true;
+      rejoin();
+    }, 300);
+    document.addEventListener('visibilitychange', rejoin);
+    return () => {
+      clearInterval(firstLoad);
+      document.removeEventListener('visibilitychange', rejoin);
+    };
+  }, [conn, status]);
+
   async function join(e: React.FormEvent) {
     e.preventDefault();
     if (!conn) return;
@@ -60,6 +95,11 @@ export default function Play() {
     try {
       setError('');
       await conn.reducers.join({ name });
+      try {
+        localStorage.setItem(JOINED_KEY, '1');
+      } catch {
+        /* ignore */
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -269,16 +309,19 @@ function Remote({ conn, selfKey, color, name, score, team }: { conn: DbConnectio
         g.stroke();
         g.setLineDash([]);
       }
-      blit(g, 'cursor', rc.x * sx, rc.y * sy, 2.4 * dpr, { tint: '#ffffff', shadow: 3 * dpr });
+      // Your finger is a ring drawn UNDER the shared cursor: when the mob agrees
+      // with you the cursor sits right on your finger and must stay visible.
       if (f) {
-        g.fillStyle = color;
+        g.lineWidth = 5 * dpr;
         g.strokeStyle = '#111';
-        g.lineWidth = 3 * dpr;
         g.beginPath();
-        g.arc(f.x * W, f.y * H, 16 * dpr, 0, Math.PI * 2);
-        g.fill();
+        g.arc(f.x * W, f.y * H, 18 * dpr, 0, Math.PI * 2);
+        g.stroke();
+        g.lineWidth = 3 * dpr;
+        g.strokeStyle = color;
         g.stroke();
       }
+      blit(g, 'cursor', rc.x * sx, rc.y * sy, 2.4 * dpr, { tint: '#ffffff', shadow: 3 * dpr });
       const now = performance.now();
       tapRings.current = tapRings.current.filter(r => now - r.t < 500);
       for (const r of tapRings.current) {
