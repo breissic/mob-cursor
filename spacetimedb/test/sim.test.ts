@@ -5,9 +5,12 @@ import {
   capWeights,
   chaos,
   geometricMedian,
+  ghostKey,
   integrate,
   makeMaze,
   makeMines,
+  packGhosts,
+  unpackGhosts,
   revealCell,
   sha256Hex,
   targetPos,
@@ -126,4 +129,26 @@ test('stage specs get harder', () => {
   const m = STAGE_SPECS.minesweeper;
   assert.ok(m[2].mines > m[1].mines && m[1].mines > m[0].mines);
   assert.ok(STAGE_SPECS.maze[2].cw > STAGE_SPECS.maze[0].cw);
+});
+
+test('ghost frame round-trips and rejects unknown formats', () => {
+  const gs = [
+    { key: 0xbeef, color: 3, team: 1, dictator: true, x: 0, y: 1 },
+    { key: 7, color: 11, team: 0, dictator: false, x: 0.5, y: 0.25 },
+  ];
+  const back = unpackGhosts(packGhosts(gs));
+  assert.equal(back.length, 2);
+  assert.deepEqual({ ...back[0], x: 0, y: 1 }, gs[0]);
+  assert.equal(back[0].y, 1);
+  assert.ok(Math.abs(back[1].x - 0.5) < 1 / 255 && Math.abs(back[1].y - 0.25) < 1 / 255);
+  assert.deepEqual(unpackGhosts(new Uint8Array([3, 1, 0, 128, 128])), []); // old 4-byte format
+  assert.deepEqual(unpackGhosts(new Uint8Array(0)), []);
+});
+
+test('ghost keys are stable and spread out', () => {
+  const ids = Array.from({ length: 200 }, (_, i) => `c200${(i * 2654435761 >>> 0).toString(16).padStart(60, '0')}`);
+  assert.equal(ghostKey(ids[0]), ghostKey(ids[0]));
+  const keys = new Set(ids.map(ghostKey));
+  assert.ok(keys.size >= 198, `only ${keys.size} distinct keys for 200 ids`);
+  for (const k of keys) assert.ok(k >= 0 && k <= 0xffff);
 });

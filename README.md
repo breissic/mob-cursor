@@ -49,12 +49,12 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 ### Why SpacetimeDB
 
 - **Server-authoritative tick in the database.** `tick` is a scheduled reducer (`reducer({ onSchedule: tickSchedule })`) running at 15 Hz. It reads the fresh pointers, applies the active control rule, integrates mass/damping physics, checks win/lose and writes **one** cursor row. Game rules live only in the module, and clients just render.
-- **Subscriptions are the network layer.** The display subscribes to `pointer` to draw ghosts. Phones subscribe only to `cursor`, `config`, `level WHERE state='running'` and `player WHERE identity = me`, so 100 phones never receive 100 pointers at 8 Hz.
+- **Subscriptions are the network layer.** The display subscribes to `pointer` to draw ghosts. Phones subscribe only to `cursor`, `config`, `level`, `ghost_frame`, non-vote `fx` and `player WHERE identity = me`, so 100 phones never receive 100 pointer rows at 15 Hz.
 - **Lifecycle reducers.** `clientConnected` and `clientDisconnected` maintain a private `session` table, mark presence, delete stale pointers and arm or disarm the tick. With zero players there are zero ticks and zero idle energy.
 - **Identity-scoped and private rows.** Admin rights, minesweeper mine positions, click votes and per-player behaviour stats live in private tables. The `am_i_admin` view exposes one per-caller bit from the private `admin` table.
 - **Scheduled one-shots.** After a level ends, `advance_schedule` starts the next one 10 s later.
 - **Event tables** for sound and particle effects, with no storage cost.
-- **Fan-out control.** Phones need everyone's ghost cursors, but subscribing to `pointer` costs N phones × N pointers × Hz messages. Instead, the tick packs every fresh pointer into a single `ghost_frame` row (4 bytes per player) at 5 Hz, so each phone gets one small row update. The row isn't rewritten while nobody moves.
+- **Fan-out control.** Phones need everyone's ghost cursors, but subscribing to `pointer` costs N phones × N pointers × Hz messages. Instead, the tick packs every fresh pointer into a single `ghost_frame` row (6 bytes per player, with a stable per-player key so phones can glide each ghost between frames) at 5 Hz, so each phone gets one small row update. The row isn't rewritten while nobody moves.
 
 ## What actually works
 

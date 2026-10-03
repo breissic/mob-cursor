@@ -496,3 +496,60 @@ export function sha256Hex(msg: string): string {
   }
   return Array.from(h, x => x.toString(16).padStart(8, '0')).join('');
 }
+
+// ---------------------------------------------------------------------------
+// Ghost frame: every fresh pointer packed into one row so phones can draw the
+// whole mob without subscribing to the pointer table.
+// ---------------------------------------------------------------------------
+
+/** Format tag in byte 0 so clients can ignore frames in a format they don't know. */
+export const GHOST_FRAME_V = 2;
+const GHOST_REC = 6;
+
+/** One ghost. `key` is stable per player across frames; x/y are normalized 0..1. */
+export type GhostRec = { key: number; color: number; team: number; dictator: boolean; x: number; y: number };
+
+/**
+ * Stable 16-bit key for an identity (FNV-1a over its hex), so clients can match
+ * ghosts between frames and smooth them. A collision only costs smoothing.
+ */
+export function ghostKey(identityHex: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < identityHex.length; i++) {
+    h ^= identityHex.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (h ^ (h >>> 16)) & 0xffff;
+}
+
+/** [version] then 6 bytes per ghost: [keyHi, keyLo, color, flags, x, y]; flags bit0 = team blue, bit1 = dictator. */
+export function packGhosts(gs: GhostRec[]): Uint8Array {
+  const data = new Uint8Array(1 + gs.length * GHOST_REC);
+  data[0] = GHOST_FRAME_V;
+  gs.forEach((g, i) => {
+    const o = 1 + i * GHOST_REC;
+    data[o] = g.key >> 8;
+    data[o + 1] = g.key & 0xff;
+    data[o + 2] = g.color;
+    data[o + 3] = (g.team & 1) | (g.dictator ? 2 : 0);
+    data[o + 4] = Math.round(clamp(g.x, 0, 1) * 255);
+    data[o + 5] = Math.round(clamp(g.y, 0, 1) * 255);
+  });
+  return data;
+}
+
+export function unpackGhosts(data: Uint8Array): GhostRec[] {
+  if (data.length < 1 || data[0] !== GHOST_FRAME_V || (data.length - 1) % GHOST_REC !== 0) return [];
+  const out: GhostRec[] = [];
+  for (let o = 1; o < data.length; o += GHOST_REC) {
+    out.push({
+      key: (data[o] << 8) | data[o + 1],
+      color: data[o + 2],
+      team: data[o + 3] & 1,
+      dictator: (data[o + 3] & 2) !== 0,
+      x: data[o + 4] / 255,
+      y: data[o + 5] / 255,
+    });
+  }
+  return out;
+}

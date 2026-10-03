@@ -18,6 +18,8 @@ import {
   cellAt,
   chaos as chaosOf,
   clamp,
+  ghostKey,
+  packGhosts,
   integrate,
   makeMaze,
   makeMines,
@@ -637,20 +639,22 @@ function maybeAutoClick(ctx: Ctx, levelId: bigint, body: { x: number; y: number 
   registerClick(ctx, body.x, body.y, 0, true);
 }
 
-/**
- * ghost_frame.data: 4 bytes per fresh pointer [colorIndex, flags, x, y]
- * flags bit0 = team blue, bit1 = current dictator. x/y quantized to 0..255.
- */
+/** ghost_frame.data: see packGhosts in sim.ts. */
 function writeGhostFrame(ctx: Ctx, pts: Pt[], dictator: string) {
   const colorById = new Map<string, number>();
   for (const pl of ctx.db.player.iter()) if (pl.connected) colorById.set(hex(pl.identity), Math.max(0, COLORS.indexOf(pl.color)));
-  const data = new Uint8Array(pts.length * 4);
-  pts.forEach((p, i) => {
-    data[i * 4] = colorById.get(p.id) ?? 0;
-    data[i * 4 + 1] = (p.team & 1) | (p.id === dictator ? 2 : 0);
-    data[i * 4 + 2] = Math.round(clamp(p.x / WORLD_W, 0, 1) * 255);
-    data[i * 4 + 3] = Math.round(clamp(p.y / WORLD_H, 0, 1) * 255);
-  });
+  const data = packGhosts(
+    pts.map(p => ({
+      key: ghostKey(p.id),
+      color: colorById.get(p.id) ?? 0,
+      team: p.team,
+      dictator: p.id === dictator,
+      x: p.x / WORLD_W,
+      y: p.y / WORLD_H,
+    }))
+      // Deterministic order, so an idle room produces identical bytes and no write.
+      .sort((a, b) => a.key - b.key || a.color - b.color)
+  );
   const prev = ctx.db.ghostFrame.id.find(0);
   if (prev) {
     if (prev.data.length === data.length && prev.data.every((v, i) => v === data[i])) return; // idle room: no write
