@@ -135,6 +135,25 @@ npm run dev                             # local frontend against Maincloud
 
 Open `#/display` on the projector and scan the QR code with phones (`#/play`). If the display runs on `localhost`, set `VITE_PUBLIC_URL` to a LAN or production URL so the QR code points somewhere phones can reach.
 
+## Deploy (one-time setup)
+
+### Module: GitHub Actions to Maincloud
+1. Push this repo to GitHub.
+2. On your machine (already logged in to the CLI), copy your CLI token: `spacetime login show --token`. Treat it like a password.
+3. In the GitHub repo, go to **Settings → Secrets and variables → Actions → New repository secret**. Name it `SPACETIMEDB_TOKEN` and paste the token.
+4. **Verify token auth on a throwaway DB first:** go to **Actions → Publish module → Run workflow** and keep the default database, `mob-cursor-ci-test`. If it's green, CI can publish as you.
+5. From then on, every push to `main` that touches `spacetimedb/` publishes `mob-cursor-live`. The workflow never passes `--delete-data`, and it only auto-confirms `remote,migrate`, so breaking schema changes fail loudly instead of wiping data.
+
+### Frontend: Vercel (Git integration)
+1. On vercel.com, choose **Add New → Project** and import the GitHub repo. The framework is auto-detected (`vercel.json` pins `npm ci` / `npm run build` / `dist`).
+2. Under **Environment Variables** (Production, and Preview if you want it), add:
+   - `VITE_SPACETIMEDB_HOST` = `https://maincloud.spacetimedb.com`
+   - `VITE_SPACETIMEDB_DB_NAME` = `mob-cursor-live`
+   - optionally `VITE_PUBLIC_URL` = your production URL (the QR target)
+3. Deploy. Every push to `main` redeploys, and PRs get preview URLs. Hash routes (`#/display`) mean no rewrite rules are needed.
+
+The client build never needs the module: `src/module_bindings/` is committed, and CI fails if it's stale.
+
 ### Admin
 
 `init` records the publisher's identity as admin. To use the admin panel from a browser:

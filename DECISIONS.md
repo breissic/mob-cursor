@@ -11,6 +11,8 @@ Small decisions made while building, newest at the bottom of each section.
 - **Index syntax**: SDK 2.10 uses `accessor` (not `name`) in table-level index options. The repo's CLAUDE.md shows the older `name` form. I used column-level `.index()` to sidestep it.
 - **Scheduled reducers use `reducer({ onSchedule: table }, ...)`**: the current docs prefer it over the deprecated `table({ scheduled })`. In 2.x, scheduled reducers are private by default, so clients cannot call `tick`.
 
+- **CI publishes with `--yes=remote,migrate`**, not bare `--yes`. Bare `--yes` means `all`, which also auto-accepts break-clients and delete-data prompts.
+
 ## Schema / server
 - **World is 16 x 9 units.** Pads send normalized 0..1 coordinates and the tick scales them. The cursor is stored in world units.
 - **The tick runs only while at least one player is connected.** `clientConnected`, `clientDisconnected` and `join` insert or delete the interval row. No players means no ticks and no energy burn.
@@ -36,4 +38,3 @@ Small decisions made while building, newest at the bottom of each section.
 
 ## Fun layer
 - **Procedures can make HTTP calls** (`ctx.http.fetch`, beta), so the commentator could live inside the module. I kept it as a separate `worker/`, per the brief. That keeps the API key off the database host and makes it easy to kill.
-- **CI publishes with `--yes=remote,migrate`**, not bare `--yes`. Bare `--yes` means `all`, which also auto-accepts break-clients and delete-data prompts.
