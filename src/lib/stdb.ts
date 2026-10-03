@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { Identity } from 'spacetimedb';
 import { DbConnection } from '../module_bindings';
 import { SPACETIMEDB_DB, SPACETIMEDB_HOST } from '../config';
@@ -114,10 +114,11 @@ export function useRows<Row>(
 /** Poll a value at a low rate (for HUD numbers derived from per-frame data). */
 export function usePoll<T>(fn: () => T, ms: number): T {
   const [v, setV] = useState(fn);
+  const fnRef = useRef(fn);
+  fnRef.current = fn; // always poll the latest closure
   useEffect(() => {
-    const id = window.setInterval(() => setV(fn()), ms);
+    const id = window.setInterval(() => setV(fnRef.current()), ms);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms]);
   return v;
 }
