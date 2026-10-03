@@ -9,3 +9,4 @@ dist/
 spacetimedb/dist/
 loadtest-results/*.tmp
 spacetime.local.json
+*.tsbuildinfo
