@@ -246,7 +246,9 @@ export function startRenderer(
       gh.x += (wx - gh.x) * k;
       gh.y += (wy - gh.y) * k;
       fresh.add(id);
-      const stale = nowMs - gh.seen > 2500;
+      // Hide ghosts that stopped updating (sleeping phone, closed tab without a clean disconnect).
+      const stale = serverMs - Number(p.updatedAt.microsSinceUnixEpoch / 1000n) > 2500;
+      if (stale) continue;
       const pl = conn.db.player.identity.find(p.identity);
       const color = pl?.color ?? '#999';
       if (lines && !stale) {

@@ -48,3 +48,4 @@ Small decisions made while building, newest at the bottom of each section.
 
 ## Fun layer
 - **Procedures can make HTTP calls** (`ctx.http.fetch`, beta), so the commentator could live inside the module. I kept it as a separate `worker/`, per the brief. That keeps the API key off the database host and makes it easy to kill.
+- **Stale pointer cleanup**: a phone that sleeps or gets backgrounded can keep its connection open without ever sending a disconnect. The tick deletes any pointer that has been silent for 10 s (live clients heartbeat every 1 s), and the display hides ghosts older than 2.5 s by server time. The player row stays `connected` until the connection really closes.
