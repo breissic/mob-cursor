@@ -190,8 +190,11 @@ export function startRenderer(
     }
     const lvl = currentLevel();
     const running = lvl && lvl.row.state === 'running' ? lvl : null;
+    // Keep the finished board on screen under the results dialog (see the explosion!).
+    const endedMs = lvl?.row.endedAt ? Number(lvl.row.endedAt.microsSinceUnixEpoch / 1000n) : 0;
+    const shown = running ?? (lvl && lvl.row.state !== 'skipped' && serverNowMs() - endedMs < 25000 ? lvl : null);
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = fieldColor(running ? running.row.kind : 'lobby');
+    g.fillStyle = fieldColor(shown ? shown.row.kind : 'lobby');
     g.fillRect(0, 0, canvas.width, canvas.height);
 
     // Fit the 16:9 world exactly into the window body, plus screen shake.
@@ -203,7 +206,7 @@ export function startRenderer(
     g.setTransform(scale, 0, 0, scale, ox, oy);
     const px = 1 / scale * dpr;
 
-    drawField(g, running ? running.row.kind : 'lobby', px);
+    drawField(g, shown ? shown.row.kind : 'lobby', px);
 
     const heat = opts.heatmap();
     if (heat) {
@@ -231,7 +234,7 @@ export function startRenderer(
       rc.y += (ey - rc.y) * k;
     }
 
-    if (running) drawLevel(g, running.view, px, serverMs, rc);
+    if (shown) drawLevel(g, shown.view, px, serverMs, rc);
 
     // Ghost cursors: everyone's pull, with a faint tug line to the shared cursor.
     const nowMs = performance.now();

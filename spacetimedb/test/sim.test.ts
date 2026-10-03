@@ -101,12 +101,15 @@ test('minesweeper: first click is safe, mines are conserved, winnable', () => {
   assert.equal(st.result, 'won');
 });
 
-test('minesweeper: three mines loses', () => {
+test('minesweeper: first bomb after the safe opener explodes and loses, revealing all mines', () => {
   const { params, progress, secret } = makeMines(seeded(3));
   let st = revealCell(params, progress, secret, 0, 0);
-  const mines = [...st.secret].map((b, i) => (b === '1' ? i : -1)).filter(i => i >= 0);
-  for (const i of mines.slice(0, 3)) st = revealCell(params, st.prog, st.secret, i % params.cols, Math.floor(i / params.cols));
+  assert.notEqual(st.result, 'lost');
+  const mine = [...st.secret].findIndex(b => b === '1');
+  st = revealCell(params, st.prog, st.secret, mine % params.cols, Math.floor(mine / params.cols));
   assert.equal(st.result, 'lost');
+  const shown = [...st.prog.cells].filter(c => c === '*' || c === 'm').length;
+  assert.equal(shown, params.mines);
 });
 
 test('revealCell keeps extra progress fields (auto-click timer)', () => {

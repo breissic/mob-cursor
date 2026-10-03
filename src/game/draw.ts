@@ -331,12 +331,12 @@ function drawMines(g: CanvasRenderingContext2D, m: MinesParams, prog: MinesProgr
         g.fillRect(x, y + ch - bev, cw, bev);
         g.fillRect(x + cw - bev, y, bev, ch);
       } else {
-        g.fillStyle = v === '*' ? '#ff3b3b' : '#e4e4e4';
+        g.fillStyle = v === '*' ? '#ff3b3b' : v === 'm' ? '#c6c6c6' : '#e4e4e4';
         g.fillRect(x, y, cw, ch);
         g.strokeStyle = '#a3a3a3';
         g.lineWidth = 1.5 * px;
         g.strokeRect(x, y, cw, ch);
-        if (v === '*') blit(g, 'bomb', x + cw / 2, y + ch / 2, Math.min(cw, ch) / 20, { center: true });
+        if (v === '*' || v === 'm') blit(g, 'bomb', x + cw / 2, y + ch / 2, Math.min(cw, ch) / 20, { center: true, alpha: v === 'm' ? 0.75 : 1 });
         else if (v !== '0') {
           worldText(g, v, x + cw / 2, y + ch / 2 + ch * 0.05, ch * 0.62, { fill: NUM_COLORS[Number(v)] ?? '#111', align: 'center', baseline: 'middle' });
         }

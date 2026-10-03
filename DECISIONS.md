@@ -36,9 +36,13 @@ Small decisions made while building, newest at the bottom of each section.
 
 - **Vote round** (`kind: 'vote'`, which is just another level row, so there's no schema change): after a game's 3rd stage, or on admin "next"/"vote", the mob gets a 3-2-1 countdown, then 7 s to park the cursor on a game card. The cursor runs at 2.5x gain and 2x top speed for the vote. When time is up, the card under the cursor wins; if the cursor is between cards, the nearest one wins, so there's always a winner. The winning game's stage 1 starts in the same tick. Card layout and winner logic live in `sim.ts` (`voteLayout`, `voteWinner`) so the display's "LEADING" chip matches the server.
 
+- **Minesweeper is one life**: a bomb explodes and ends the stage immediately, and every mine is revealed (`'m'` cells). Before this a bomb cost one of 3 lives, which players read as "a bomb did nothing, then it failed at some random later time". Auto-click delay is now 0-30 s.
+- **The board stays on screen after a stage ends**: the display keeps drawing the finished level, and the results dialog waits 1.5 s so the room sees the win or explosion first.
+
 ## Client
 - **Hash routes** (`#/display`, `#/play`, `#/admin`), so the static host needs no rewrites.
 - **No React re-render per frame**: the canvas reads `conn.db` in rAF. React chrome uses `useRows`, which coalesces table callbacks to at most every 100-500 ms.
+- **The phone has no CLICK button**: taps on the pad only send `click` during minesweeper, the only game where clicks do anything. Elsewhere no reducer call is spent.
 - **Phones subscribe only to** `cursor`, `config`, `level WHERE state='running'` and `player WHERE identity = me`. The phone shows a mini-map from the cursor row, so it never needs the pointer table.
 - **Phone send loop**: a `setTimeout` chain at `config.pointerHzEffective`. It sends only if the pointer moved more than 1% of the pad, or after a 1 s heartbeat, and only while the page is visible.
 - **The QR code points at `VITE_PUBLIC_URL`** if set (useful when the display runs on localhost but phones need a LAN or prod URL). Otherwise it uses the current origin. `?db=` and `?host=` overrides carry over.

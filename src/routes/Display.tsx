@@ -131,15 +131,18 @@ export default function Display() {
   const isQuiet = (p: { connected: boolean; identity: { toHexString(): string } }) => warm && p.connected && !activeIds.has(p.identity.toHexString());
   const playing = online.filter(p => !isQuiet(p)).length;
   const rankOf = (p: (typeof players)[number]) => (!p.connected ? 2 : isQuiet(p) ? 1 : 0);
-  const board = [...players].sort((a, b) => rankOf(a) - rankOf(b) || b.score - a.score).slice(0, 10);
+  // Global leaderboard (all-time score this round) of everyone online right now.
+  const board = [...online].sort((a, b) => rankOf(a) - rankOf(b) || b.score - a.score);
 
   // Phase machine (all derived from server state + server clock).
   const meta = current ? metaOf(current) : {};
   const running = current?.state === 'running';
   const endedMs = current?.endedAt ? Number(current.endedAt.microsSinceUnixEpoch / 1000n) : 0;
   const inIntro = running && now < (meta.playAt ?? 0);
-  const inResults = !!current && !running && current.state !== 'skipped' && now - endedMs < 25000;
-  const inLobby = !current || (!running && !inResults);
+  const ended = !!current && !running && current.state !== 'skipped' && now - endedMs < 25000;
+  // Hold the results dialog for 1.5 s so everyone sees the win/explosion on the board.
+  const inResults = ended && now - endedMs > 1500;
+  const inLobby = !current || (!running && !ended);
   const countdown = inIntro ? Math.ceil(((meta.playAt ?? 0) - now) / 1000) : 0;
   const timeLeft = running && !inIntro ? Math.max(0, Number(current!.deadline.microsSinceUnixEpoch / 1000n) - now) / 1000 : null;
 
@@ -152,7 +155,7 @@ export default function Display() {
     }
   }, [countdown]);
 
-  const gm = GAME_META[running || inResults ? current!.kind : 'lobby'] ?? GAME_META.lobby;
+  const gm = GAME_META[running || ended ? current!.kind : 'lobby'] ?? GAME_META.lobby;
   const latestLine = commentary.reduce<(typeof commentary)[number] | null>((a, b) => (!a || b.id > a.id ? b : a), null);
   const showLine = latestLine && now - Number(latestLine.at.microsSinceUnixEpoch / 1000n) < 14000;
   const [ruleTitle, ruleSub] = RULE_LABEL[config?.rule ?? 'mean'] ?? [config?.rule ?? '', ''];
@@ -231,7 +234,7 @@ export default function Display() {
             <b>{chaos > 0.8 ? 'ANARCHY' : chaos > 0.55 ? 'ARGUING' : chaos > 0.3 ? 'BICKERING' : 'HIVE MIND'}</b>
           </div>
         </Win>
-        <Win title="SCORES.TXT" color="#ffd23f" className="scores">
+        <Win title={`LEADERBOARD · ${online.length}`} color="#ffd23f" className="scores">
           <ol className="board">
             {board.map((p, i) => (
               <li key={p.identity.toHexString()} className={`${i === 0 && p.score > 0 ? 'top1' : ''} ${p.connected ? (isQuiet(p) ? 'quiet' : '') : 'off'}`} title={isQuiet(p) ? 'quiet: no input lately' : undefined}>
@@ -244,7 +247,7 @@ export default function Display() {
                 <b>{p.score}</b>
               </li>
             ))}
-            {board.length === 0 && <li>nobody yet…</li>}
+            {board.length === 0 && <li>nobody online yet…</li>}
           </ol>
         </Win>
       </aside>

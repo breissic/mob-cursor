@@ -243,7 +243,7 @@ export function voteWinner(cards: VoteCard[], x: number, y: number): VoteCard {
 export const VOTE_START = { x: WORLD_W / 2, y: 1.2 };
 
 /** Minesweeper auto-click fires after a random delay in this range (ms). */
-export const AUTO_CLICK_MIN_MS = 2000;
+export const AUTO_CLICK_MIN_MS = 0;
 export const AUTO_CLICK_MAX_MS = 30000;
 
 export type TargetsParams = {
@@ -379,8 +379,9 @@ export function makeMines(rand: Rand, cols = 12, rows = 7, mines = 12) {
       placed++;
     }
   }
-  const params: MinesParams = { cols, rows, mines, lives: 3 };
-  const progress: MinesProgress = { cells: '#'.repeat(n), lives: 3, firstDone: false };
+  // One life: a bomb ends the stage on the spot, like real Minesweeper.
+  const params: MinesParams = { cols, rows, mines, lives: 1 };
+  const progress: MinesProgress = { cells: '#'.repeat(n), lives: 1, firstDone: false };
   return { params, progress, secret: bits.join('') };
 }
 
@@ -429,6 +430,8 @@ export function revealCell(
     cells[idx] = '*';
     lives -= 1;
     result = lives <= 0 ? 'lost' : 'mine';
+    // Game over: show every other mine ('m') like classic Minesweeper.
+    if (result === 'lost') bits.forEach((b, i) => b === '1' && cells[i] === '#' && (cells[i] = 'm'));
   } else {
     const q: number[] = [idx];
     while (q.length) {

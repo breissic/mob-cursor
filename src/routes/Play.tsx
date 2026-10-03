@@ -245,17 +245,18 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
     let lvl = null as LevelRow | null;
     for (const l of conn.db.level.iter()) if (!lvl || l.id > lvl.id) lvl = l;
     const now = serverNowMs();
-    if (!lvl) return { text: 'WAITING FOR HOST…', cls: '', game: 'LOBBY' };
+    if (!lvl) return { text: 'WAITING FOR HOST…', cls: '', game: 'LOBBY', mines: false };
     const meta = JSON.parse(lvl.params) as { playAt?: number; stage?: number; stages?: number };
     const gm = GAME_META[lvl.kind] ?? GAME_META.lobby;
     const game = `${gm.exe} · ${meta.stage ?? 1}/${meta.stages ?? 3}`;
     if (lvl.state === 'running') {
       const c = Math.ceil(((meta.playAt ?? 0) - now) / 1000);
-      return c > 0 ? { text: String(c), cls: 'count', game } : { text: '', cls: '', game };
+      const mines = lvl.kind === 'minesweeper' && c <= 0;
+      return c > 0 ? { text: String(c), cls: 'count', game, mines } : { text: '', cls: '', game, mines };
     }
     const ended = lvl.endedAt ? Number(lvl.endedAt.microsSinceUnixEpoch / 1000n) : 0;
-    if (lvl.state !== 'skipped' && now - ended < 10000) return { text: lvl.state === 'won' ? `CLEAR! +${lvl.score}` : 'FAILED!', cls: '', game };
-    return { text: 'GET READY…', cls: '', game };
+    if (lvl.state !== 'skipped' && now - ended < 10000) return { text: lvl.state === 'won' ? `CLEAR! +${lvl.score}` : 'FAILED!', cls: '', game, mines: false };
+    return { text: 'GET READY…', cls: '', game, mines: false };
   }, 250);
 
   const down = useRef<{ t: number; x: number; y: number } | null>(null);
@@ -267,6 +268,8 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
     };
   };
   const click = () => {
+    // Clicks only matter in minesweeper; don't spend reducer calls elsewhere.
+    if (!banner.mines) return;
     navigator.vibrate?.(15);
     const f = finger.current;
     if (f) tapRings.current.push({ ...f, t: performance.now() });
@@ -314,10 +317,9 @@ function Remote({ conn, color, name, score, team }: { conn: DbConnection; color:
           )}
         </div>
       </Win>
-      <button className="click-btn" onClick={click}>
-        CLICK!
-      </button>
-      <div className="phone-foot">drag = pull the cursor · tap = click vote · {sent}/s</div>
+      <div className="phone-foot">
+        drag = pull the cursor{banner.mines ? ' · tap = click vote' : ''} · {sent}/s
+      </div>
     </div>
   );
 }
