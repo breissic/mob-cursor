@@ -71,7 +71,7 @@ There is no backend of our own. Browsers talk directly to Maincloud over WebSock
 | Config-driven pointer rate (`pointerHzEffective`), dead-band, heartbeat | ✅ |
 | Bot load-test script + Maincloud measurements | ✅ (results below) |
 | Sound effects, screen shake, confetti, heatmap of cursor path | ✅ |
-| LLM commentator worker | see `worker/` (M7) |
+| LLM commentator worker (`worker/`) | ✅ pipeline verified in dry-run mode (claims admin, reacts to events, posts lines). The live Claude call hasn't been exercised yet because no API key was available while building |
 | Stretch levels (typing, DMV form, Pong, captcha), saboteurs, replay | ❌ not built |
 
 ## Control rules

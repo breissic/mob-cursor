@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'spacetimedb/dist', 'src/module_bindings', 'node_modules', 'spacetimedb/node_modules'] },
+  { ignores: ['dist', 'worker/node_modules', 'spacetimedb/dist', 'src/module_bindings', 'node_modules', 'spacetimedb/node_modules'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

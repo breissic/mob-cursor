@@ -17,9 +17,12 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             spacetimedb/package-lock.json
+            worker/package-lock.json
       - run: npm ci
       - run: npm ci
         working-directory: spacetimedb
+      - run: npm ci
+        working-directory: worker
       - uses: ./.github/actions/setup-spacetime
 
       - name: Typecheck

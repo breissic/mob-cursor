@@ -12,7 +12,7 @@ function connect(label: string): Promise<DbConnection> {
       .onConnect(conn => {
         conn.subscriptionBuilder()
           .onApplied(() => resolve(conn))
-          .onError((_c, e) => reject(e))
+          .onError(ctx => reject(ctx.event ?? new Error('subscription failed')))
           .subscribe([tables.cursor, tables.player, tables.pointer, tables.config]);
       })
       .onConnectError((_c, e) => reject(e))

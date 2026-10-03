@@ -36,7 +36,7 @@ function connect(subscribe: (c: DbConnection) => unknown[]): Promise<DbConnectio
         conn
           .subscriptionBuilder()
           .onApplied(() => resolve(conn))
-          .onError((_c, e) => reject(e))
+          .onError(ctx => reject(ctx.event ?? new Error('subscription failed')))
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .subscribe(subscribe(conn) as any);
       })
