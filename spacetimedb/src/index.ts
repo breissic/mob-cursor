@@ -10,7 +10,12 @@ import {
   RULES,
   STAGES,
   STAGE_SPECS,
+  VOTE_SECS,
+  VOTE_START,
   targetPos,
+  voteLayout,
+  voteWinner,
+  type VoteParams,
   type StageMeta,
   WORLD_H,
   WORLD_W,
@@ -18,6 +23,7 @@ import {
   cellAt,
   chaos as chaosOf,
   clamp,
+  cursorPhysics,
   ghostKey,
   packGhosts,
   integrate,
@@ -175,6 +181,7 @@ function playAtOf(l: { params: string }): number {
 
 /** Where the cursor waits during the countdown (and respawns in the maze). */
 function startPos(kind: string, params: unknown) {
+  if (kind === 'vote') return VOTE_START;
   if (kind === 'maze') {
     const m = params as MazeParams;
     return tileCenter(m, m.start.c, m.start.r);
@@ -236,13 +243,64 @@ function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
 }
 
 /** Party flow: stage 1..STAGES of a game, then the next game. */
-function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } {
+/** Party flow: stage 1..STAGES of a game, then the mob votes for the next game. */
+function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } | 'vote' {
   const cur = currentLevel(ctx);
-  if (!cur || !LEVEL_ROTATION.includes(cur.kind as PlayKind)) return { kind: LEVEL_ROTATION[0] as PlayKind, stage: 1 };
+  if (!cur || !LEVEL_ROTATION.includes(cur.kind as PlayKind)) return 'vote';
   const stage = stageOf(cur);
   if (stage < STAGES) return { kind: cur.kind as PlayKind, stage: stage + 1 };
-  const i = LEVEL_ROTATION.indexOf(cur.kind as PlayKind);
-  return { kind: LEVEL_ROTATION[(i + 1) % LEVEL_ROTATION.length] as PlayKind, stage: 1 };
+  return 'vote';
+}
+
+function startNext(ctx: Ctx) {
+  const n = nextUp(ctx);
+  if (n === 'vote') startVote(ctx);
+  else startLevel(ctx, n.kind, n.stage);
+}
+
+/** Vote round: one card per game; whatever the cursor hovers when time runs out wins. */
+function startVote(ctx: Ctx) {
+  const cur = currentLevel(ctx);
+  if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
+  for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
+  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+  const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
+  const params: VoteParams & StageMeta = {
+    cards: voteLayout(LEVEL_ROTATION),
+    lastKind: cur && LEVEL_ROTATION.includes(cur.kind as PlayKind) ? cur.kind : undefined,
+    stage: 1,
+    stages: 1,
+    playAt,
+  };
+  ctx.db.level.insert({
+    id: 0n,
+    kind: 'vote',
+    state: 'running',
+    params: JSON.stringify(params),
+    progress: '{}',
+    startedAt: ctx.timestamp,
+    deadline: ts(BigInt(playAt) * 1000n + BigInt(VOTE_SECS) * MICROS),
+    endedAt: undefined,
+    score: 0,
+    chaosSum: 0,
+    ticks: 0,
+  });
+  resetCursorTo(ctx, VOTE_START.x, VOTE_START.y);
+  log(ctx, 'vote_start', '', {});
+}
+
+/** Close the vote and start the winner. Returns where the new level's cursor starts. */
+function resolveVote(ctx: Ctx, levelId: bigint, x: number, y: number) {
+  const l = ctx.db.level.id.find(levelId);
+  if (!l || l.state !== 'running') return null;
+  const p = JSON.parse(l.params) as VoteParams;
+  const win = voteWinner(p.cards, x, y);
+  ctx.db.level.id.update({ ...l, state: 'won', endedAt: ctx.timestamp, progress: JSON.stringify({ chosen: win.kind }) });
+  fx(ctx, 'voted', win.x + win.w / 2, win.y + win.h / 2, win.kind);
+  log(ctx, 'vote_result', '', { chosen: win.kind });
+  startLevel(ctx, win.kind as PlayKind, 1);
+  const nl = currentLevel(ctx);
+  return nl ? startPos(nl.kind, JSON.parse(nl.params)) : null;
 }
 
 function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') {
@@ -542,7 +600,8 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   const lvl = currentLevel(ctx);
   const running = lvl && lvl.state === 'running' ? lvl : undefined;
   const before = { x: cur.x, y: cur.y };
-  let body = integrate(cur, target, dt, cfg.gain, cfg.damping, cfg.maxSpeed);
+  const spring = cursorPhysics(running?.kind, cfg);
+  let body = integrate(cur, target, dt, spring.gain, spring.damping, spring.maxSpeed);
   const ch = chaosOf(pts, cur.x, cur.y);
   const chaosSmoothed = cur.chaos + (ch - cur.chaos) * Math.min(1, dt * 3);
 
@@ -588,11 +647,17 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
         if (tl.c === m.goal.c && tl.r === m.goal.r) outcome = 'won';
       }
     }
-    if (!outcome && tNow >= running.deadline.microsSinceUnixEpoch) outcome = 'lost';
+    const timeUp = tNow >= running.deadline.microsSinceUnixEpoch;
+    if (running.kind === 'vote') {
+      if (timeUp) {
+        const s = resolveVote(ctx, running.id, body.x, body.y);
+        if (s) body = { x: s.x, y: s.y, vx: 0, vy: 0 };
+      }
+    } else if (!outcome && timeUp) outcome = 'lost';
     // The level row is broadcast to every phone, so only write it when progress
     // changes or once a second (cooperation sample), never every tick.
     const sampleNow = (cur.tick + 1n) % BigInt(cfg.tickHz) === 0n;
-    if (progress !== running.progress || sampleNow || outcome) {
+    if (running.kind !== 'vote' && (progress !== running.progress || sampleNow || outcome)) {
       ctx.db.level.id.update({
         ...running,
         progress,
@@ -718,8 +783,7 @@ export const auto_advance = spacetimedb.reducer(
     const cur = currentLevel(ctx);
     if (!cur || cur.id !== arg.afterLevelId || cur.state === 'running') return;
     if (!getConfig(ctx).autoAdvance) return;
-    const n = nextUp(ctx);
-    startLevel(ctx, n.kind, n.stage);
+    startNext(ctx);
   }
 );
 
@@ -795,9 +859,10 @@ export const admin_set_config = spacetimedb.reducer({ key: t.string(), value: t.
 
 export const admin_start_level = spacetimedb.reducer({ kind: t.string() }, (ctx, { kind }) => {
   requireAdmin(ctx);
-  const n = kind === 'next' ? nextUp(ctx) : { kind: kind as PlayKind, stage: 1 };
-  if (!LEVEL_ROTATION.includes(n.kind)) throw new SenderError(`unknown level ${kind}`);
-  startLevel(ctx, n.kind, n.stage);
+  if (kind === 'next') return startNext(ctx);
+  if (kind === 'vote') return startVote(ctx);
+  if (!LEVEL_ROTATION.includes(kind as PlayKind)) throw new SenderError(`unknown level ${kind}`);
+  startLevel(ctx, kind as PlayKind, 1);
 });
 
 export const admin_start_stage = spacetimedb.reducer({ kind: t.string(), stage: t.u32() }, (ctx, { kind, stage }) => {

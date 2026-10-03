@@ -6,7 +6,7 @@ export const WORLD_H = 9;
 export type Rule = 'mean' | 'median' | 'activity' | 'tug' | 'dictator';
 export const RULES: Rule[] = ['mean', 'median', 'activity', 'tug', 'dictator'];
 
-export type LevelKind = 'lobby' | 'targets' | 'maze' | 'minesweeper';
+export type LevelKind = 'lobby' | 'targets' | 'maze' | 'minesweeper' | 'vote';
 export const LEVEL_ROTATION: LevelKind[] = ['targets', 'maze', 'minesweeper'];
 
 /** Player palette. Index is sent in ghost_frame, so client and server share it. */
@@ -197,6 +197,62 @@ export const STAGE_SPECS = {
     { cols: 14, rows: 8, mines: 20, secs: 210 },
   ],
 } as const;
+
+// ---------------------------------------------------------------------------
+// Vote round: between games the mob parks the (extra strong) cursor on a card.
+// ---------------------------------------------------------------------------
+
+/** Seconds of voting after the 3-2-1 countdown. */
+export const VOTE_SECS = 7;
+/** Cursor strength multipliers during a vote. */
+export const VOTE_GAIN = 2.5;
+export const VOTE_DAMPING = 1.3;
+export const VOTE_SPEED = 2;
+
+export type Spring = { gain: number; damping: number; maxSpeed: number };
+/**
+ * Spring the tick runs for the current running level kind. Shared with the
+ * client so its cursor prediction always integrates the same physics.
+ */
+export function cursorPhysics(kind: string | null | undefined, cfg: Spring): Spring {
+  return kind === 'vote'
+    ? { gain: cfg.gain * VOTE_GAIN, damping: cfg.damping * VOTE_DAMPING, maxSpeed: cfg.maxSpeed * VOTE_SPEED }
+    : { gain: cfg.gain, damping: cfg.damping, maxSpeed: cfg.maxSpeed };
+}
+
+export type VoteCard = { kind: string; x: number; y: number; w: number; h: number };
+export type VoteParams = { cards: VoteCard[]; lastKind?: string };
+export type VoteProgress = { chosen?: string };
+
+/** Lay the cards out side by side, centered, below a strip where the cursor starts. */
+export function voteLayout(kinds: readonly string[]): VoteCard[] {
+  const n = kinds.length;
+  const gap = 0.5;
+  const w = Math.min(4.4, (WORLD_W - 1 - gap * (n - 1)) / n);
+  const h = 5.6;
+  const total = n * w + (n - 1) * gap;
+  const x0 = (WORLD_W - total) / 2;
+  return kinds.map((kind, i) => ({ kind, x: x0 + i * (w + gap), y: 2.4, w, h }));
+}
+
+/** Card under the cursor, else the nearest card (someone always wins). */
+export function voteWinner(cards: VoteCard[], x: number, y: number): VoteCard {
+  const inside = cards.find(c => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
+  if (inside) return inside;
+  let best = cards[0];
+  let bd = Infinity;
+  for (const c of cards) {
+    const d = Math.hypot(clamp(x, c.x, c.x + c.w) - x, clamp(y, c.y, c.y + c.h) - y);
+    if (d < bd) {
+      bd = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/** Where the cursor waits during the vote countdown: top middle, outside every card. */
+export const VOTE_START = { x: WORLD_W / 2, y: 1.2 };
 
 /** Minesweeper auto-click fires after a random delay in this range (ms). */
 export const AUTO_CLICK_MIN_MS = 2000;

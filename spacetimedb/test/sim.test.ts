@@ -4,6 +4,7 @@ import {
   aggregate,
   capWeights,
   chaos,
+  cursorPhysics,
   geometricMedian,
   ghostKey,
   integrate,
@@ -15,6 +16,9 @@ import {
   sha256Hex,
   targetPos,
   STAGE_SPECS,
+  voteLayout,
+  voteWinner,
+  VOTE_START,
   type Pt,
 } from '../src/sim.ts';
 
@@ -151,4 +155,29 @@ test('ghost keys are stable and spread out', () => {
   const keys = new Set(ids.map(ghostKey));
   assert.ok(keys.size >= 198, `only ${keys.size} distinct keys for 200 ids`);
   for (const k of keys) assert.ok(k >= 0 && k <= 0xffff);
+});
+
+test('vote: cards fit the field, start spot is outside every card', () => {
+  const cards = voteLayout(['targets', 'maze', 'minesweeper']);
+  for (const c of cards) {
+    assert.ok(c.x >= 0 && c.x + c.w <= 16 && c.y >= 0 && c.y + c.h <= 9);
+    assert.ok(!(VOTE_START.x >= c.x && VOTE_START.x <= c.x + c.w && VOTE_START.y >= c.y && VOTE_START.y <= c.y + c.h));
+  }
+});
+
+test('vote: hovered card wins, otherwise the nearest', () => {
+  const cards = voteLayout(['targets', 'maze', 'minesweeper']);
+  const mid = (i: number) => ({ x: cards[i].x + cards[i].w / 2, y: cards[i].y + cards[i].h / 2 });
+  for (let i = 0; i < 3; i++) assert.equal(voteWinner(cards, mid(i).x, mid(i).y).kind, cards[i].kind);
+  assert.equal(voteWinner(cards, 0.1, 8.9).kind, 'targets');
+  assert.equal(voteWinner(cards, 15.9, 0.1).kind, 'minesweeper');
+  assert.equal(voteWinner(cards, VOTE_START.x, VOTE_START.y).kind, 'maze');
+});
+
+test('vote rounds run a stronger spring, everything else the config spring', () => {
+  const cfg = { gain: 40, damping: 12, maxSpeed: 20 };
+  assert.deepEqual(cursorPhysics('maze', cfg), cfg);
+  assert.deepEqual(cursorPhysics(undefined, cfg), cfg);
+  const v = cursorPhysics('vote', cfg);
+  assert.ok(v.gain > cfg.gain && v.damping > cfg.damping && v.maxSpeed > cfg.maxSpeed);
 });

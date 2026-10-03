@@ -1,5 +1,5 @@
 import type { DbConnection } from '../module_bindings';
-import { WORLD_H, WORLD_W, type MinesProgress } from '../../spacetimedb/src/sim';
+import { cursorPhysics, WORLD_H, WORLD_W, type MinesProgress } from '../../spacetimedb/src/sim';
 import { drawCursorSprite, drawField, drawFuse, drawLevel, fieldColor, nameTag, parseLevel, worldText, type LevelView } from '../game/draw';
 import { blit } from '../game/sprites';
 import { serverNowMs } from '../lib/clock';
@@ -116,6 +116,11 @@ export function startRenderer(
         flash = 1;
         flashColor = '40,40,40';
         break;
+      case 'voted':
+        sfx('win');
+        for (let i = 0; i < 8; i++) burst(Math.random() * WORLD_W, -0.5, 30, 1);
+        add({ kind: 'text', life: 2.2, text: `${(row.who || 'GAME').toUpperCase()} WINS!`, color: '#ffd23f', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
       case 'dictator':
         add({ kind: 'text', life: 2, text: 'DICTATOR!', color: '#ffd23f', size: 0.5, vy: -0.4, y: row.y - 0.6 });
         break;
@@ -215,7 +220,10 @@ export function startRenderer(
     // Cursor prediction: run the server's spring forward from the last tick.
     const cur = conn.db.cursor.id.find(0);
     const cfg = conn.db.config.id.find(0);
-    if (cur && cfg) rc = smoother.step(dt, cfg, running ? cursorHoldUntilMs(running.view) : 0);
+    if (cur && cfg) {
+      const phys = { ...cursorPhysics(running?.row.kind, cfg), tickHz: cfg.tickHz };
+      rc = smoother.step(dt, phys, running ? cursorHoldUntilMs(running.view) : 0);
+    }
 
     if (running) drawLevel(g, running.view, px, serverMs, rc);
 

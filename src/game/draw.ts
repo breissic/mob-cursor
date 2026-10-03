@@ -10,6 +10,8 @@ import {
   type MinesProgress,
   type TargetsParams,
   type TargetsProgress,
+  type VoteParams,
+  voteWinner,
 } from '../../spacetimedb/src/sim';
 import { blit } from './sprites';
 
@@ -20,6 +22,7 @@ export const GAME_META: Record<string, { exe: string; title: string; color: stri
   targets: { exe: 'CLICKFEST.EXE', title: 'Clickfest', color: '#ff5a36', goal: 'Hit the numbered targets in order.' },
   maze: { exe: 'MAZE.EXE', title: 'The Maze', color: '#2ec4b6', goal: 'Reach the trophy. Touch a wall = back to start.' },
   minesweeper: { exe: 'MINES.EXE', title: 'Mob Sweeper', color: '#3a86ff', goal: 'Clear the board. Click together. The cursor also clicks by itself 💣' },
+  vote: { exe: 'VOTE.EXE', title: 'Pick the next game', color: '#ff4fa3', goal: 'Park the cursor on a game. It is EXTRA strong right now. Time out = that game!' },
   lobby: { exe: 'LOBBY.EXE', title: 'Lobby', color: '#ffd23f', goal: 'Scan the QR code to join.' },
 };
 
@@ -63,6 +66,7 @@ export function measureWorld(g: CanvasRenderingContext2D, text: string, size: nu
 
 /** Color behind the playfield (also fills the letterbox bars). */
 export function fieldColor(kind: string) {
+  if (kind === 'vote') return '#5b2a86';
   return kind === 'targets' ? '#fff6e0' : kind === 'maze' ? '#1b2550' : kind === 'minesweeper' ? '#9e9e9e' : '#0e6f6b';
 }
 
@@ -88,6 +92,11 @@ export function drawField(g: CanvasRenderingContext2D, kind: string, px: number)
   } else if (kind === 'maze') {
     g.fillStyle = '#1b2550';
     g.fillRect(0, 0, WORLD_W, WORLD_H);
+  } else if (kind === 'vote') {
+    g.fillStyle = '#5b2a86';
+    g.fillRect(0, 0, WORLD_W, WORLD_H);
+    g.fillStyle = 'rgba(255,255,255,0.08)';
+    for (let y = 0.25; y < WORLD_H; y += 0.5) for (let x = 0.25; x < WORLD_W; x += 0.5) g.fillRect(x, y, 0.06, 0.06);
   } else if (kind === 'minesweeper') {
     g.fillStyle = '#9e9e9e';
     g.fillRect(0, 0, WORLD_W, WORLD_H);
@@ -111,6 +120,7 @@ export function drawLevel(
   const t = (serverMs - lv.playAt) / 1000;
   if (lv.kind === 'targets') drawTargets(g, lv.params as TargetsParams, lv.progress as TargetsProgress, px, Math.max(0, t), serverMs, detail);
   else if (lv.kind === 'maze') drawMaze(g, lv.params as MazeParams, lv.progress as MazeProgress, px, serverMs);
+  else if (lv.kind === 'vote') drawVote(g, lv.params as VoteParams, px, serverMs, cursor);
   else if (lv.kind === 'minesweeper') drawMines(g, lv.params as MinesParams, lv.progress as MinesProgress, px, cursor, detail);
 }
 
@@ -259,6 +269,45 @@ function drawMaze(g: CanvasRenderingContext2D, m: MazeParams, prog: MazeProgress
   g.fillRect(gx + tw * 0.08, gy + th * 0.08, tw * 0.84, th * 0.84);
   blit(g, 'trophy', gx + tw / 2, gy + th / 2 - Math.abs(Math.sin(ms / 300)) * th * 0.08, Math.min(tw, th) / 20, { center: true, shadow: 0.06 });
   void prog;
+}
+
+/** Vote round: one big card per game; the hovered one lifts and glows. */
+function drawVote(g: CanvasRenderingContext2D, p: VoteParams, px: number, ms: number, cursor: { x: number; y: number }) {
+  const lead = voteWinner(p.cards, cursor.x, cursor.y);
+  worldText(g, 'PARK THE CURSOR ON YOUR PICK!', WORLD_W / 2, 0.75, 0.42, { fill: '#ffd23f', stroke: '#111', strokeW: 0.12, align: 'center', baseline: 'middle' });
+  for (const c of p.cards) {
+    const meta = GAME_META[c.kind] ?? GAME_META.lobby;
+    const hot = c === lead;
+    const lift = hot ? 0.18 + Math.sin(ms / 160) * 0.05 : 0;
+    const x = c.x - lift;
+    const y = c.y - lift;
+    // Hard shadow, body, title band.
+    g.fillStyle = '#111';
+    g.fillRect(c.x + 0.14, c.y + 0.14, c.w, c.h);
+    g.fillStyle = '#f3ead7';
+    g.fillRect(x, y, c.w, c.h);
+    g.fillStyle = meta.color;
+    g.fillRect(x, y, c.w, 0.7);
+    g.lineWidth = (hot ? 7 : 4) * px;
+    g.strokeStyle = hot ? '#ffd23f' : '#111';
+    g.strokeRect(x, y, c.w, c.h);
+    g.lineWidth = 4 * px;
+    g.strokeStyle = '#111';
+    g.beginPath();
+    g.moveTo(x, y + 0.7);
+    g.lineTo(x + c.w, y + 0.7);
+    g.stroke();
+    worldText(g, meta.exe, x + 0.2, y + 0.36, 0.34, { fill: '#111', baseline: 'middle' });
+    // Icon.
+    const cx = x + c.w / 2;
+    const cy = y + 2.5;
+    if (c.kind === 'targets') bullseye(g, cx, cy, 1.1, px);
+    else if (c.kind === 'maze') blit(g, 'trophy', cx, cy, 0.15, { center: true, shadow: 0.12 });
+    else blit(g, 'bomb', cx, cy, 0.15, { center: true, shadow: 0.12 });
+    worldText(g, meta.title, cx, y + 4.3, 0.42, { fill: '#111', align: 'center', baseline: 'middle' });
+    if (p.lastKind === c.kind) sticker(g, x + c.w - 1.1, y + 1.15, 'AGAIN?', 0.26, '#ffffff', '#111', px);
+    if (hot) sticker(g, cx, y + 5.05, 'VOTING ▼', 0.34, '#ffd23f', '#111', px);
+  }
 }
 
 const NUM_COLORS = ['', '#1d4ed8', '#15803d', '#dc2626', '#1e3a8a', '#7f1d1d', '#0e7490', '#111', '#6b7280'];

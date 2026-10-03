@@ -37,6 +37,8 @@ Small decisions made while building, newest at the bottom of each section.
 - **Ghost key** is a 16-bit FNV-1a hash of the identity, not a schema column: changing the byte encoding needs no binding regeneration. Phones match ghosts across frames by key + color and glide them over ~1.25 frame intervals (raw 5 Hz frames teleported). A collision only drops smoothing for that pair. Records are sorted by key so an idle room yields identical bytes and skips the write. Old 4-byte frames are always 4n bytes and can never parse as 1 + 6k, so mixed deploys show no ghosts rather than garbage.
 - **Phones hide their own ghost**: the finger dot already shows you, and a copy trailing ~200 ms behind it read as a bug.
 
+- **Vote round** (`kind: 'vote'`, which is just another level row, so there's no schema change): after a game's 3rd stage, or on admin "next"/"vote", the mob gets a 3-2-1 countdown, then 7 s to park the cursor on a game card. The cursor runs at 2.5x gain and 2x top speed for the vote. When time is up, the card under the cursor wins; if the cursor is between cards, the nearest one wins, so there's always a winner. The winning game's stage 1 starts in the same tick. Card layout and winner logic live in `sim.ts` (`voteLayout`, `voteWinner`) so the display's "LEADING" chip matches the server.
+
 ## Client
 - **Hash routes** (`#/display`, `#/play`, `#/admin`), so the static host needs no rewrites.
 - **No React re-render per frame**: the canvas reads `conn.db` in rAF. React chrome uses `useRows`, which coalesces table callbacks to at most every 100-500 ms.

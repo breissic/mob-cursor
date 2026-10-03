@@ -9,7 +9,7 @@ import { countdownBeep, disableSound, enableSound } from '../display/audio';
 import { GAME_META } from '../game/draw';
 import { spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
-import { LEVEL_ROTATION, STAGES } from '../../spacetimedb/src/sim';
+import { LEVEL_ROTATION, STAGES, VOTE_SECS, voteWinner } from '../../spacetimedb/src/sim';
 
 export const RULE_LABEL: Record<string, [string, string]> = {
   mean: ['DEMOCRACY', 'average of everyone'],
@@ -25,9 +25,8 @@ const metaOf = (l: LevelRow) => JSON.parse(l.params) as { stage?: number; stages
 
 function nextUp(l: LevelRow) {
   const stage = metaOf(l).stage ?? 1;
-  if (stage < STAGES) return { kind: l.kind, stage: stage + 1 };
-  const i = LEVEL_ROTATION.indexOf(l.kind as (typeof LEVEL_ROTATION)[number]);
-  return { kind: LEVEL_ROTATION[(i + 1) % LEVEL_ROTATION.length], stage: 1 };
+  if (stage < STAGES && LEVEL_ROTATION.includes(l.kind as (typeof LEVEL_ROTATION)[number])) return { kind: l.kind, stage: stage + 1 };
+  return { kind: 'vote', stage: 0 };
 }
 
 export default function Display() {
@@ -108,6 +107,10 @@ export default function Display() {
   const events = useRows(c => c.db.eventLog, 500);
   const now = usePoll(serverNowMs, 200);
   const chaos = usePoll(() => conn?.db.cursor.id.find(0)?.chaos ?? 0, 150);
+  const cursorPos = usePoll(() => {
+    const c = conn?.db.cursor.id.find(0);
+    return c ? { x: c.x, y: c.y } : undefined;
+  }, 200);
   const stats = usePoll(() => ({ ...(statsRef.current ?? { pointerPerSec: 0, votesPerSec: 0, ticksPerSec: 0, fps: 0 }) }), 1000);
 
   const online = players.filter(p => p.connected);
@@ -119,7 +122,13 @@ export default function Display() {
     for (const p of conn?.db.pointer.iter() ?? []) if (Number(p.updatedAt.microsSinceUnixEpoch / 1000n) > cutoff) ids.add(p.identity.toHexString());
     return ids;
   }, 1000);
-  const isQuiet = (p: { connected: boolean; identity: { toHexString(): string } }) => p.connected && !activeIds.has(p.identity.toHexString());
+  // Give the pointer subscription a few seconds before calling anyone quiet.
+  const [warm, setWarm] = useState(false);
+  useEffect(() => {
+    const id = window.setTimeout(() => setWarm(true), 3000);
+    return () => clearTimeout(id);
+  }, []);
+  const isQuiet = (p: { connected: boolean; identity: { toHexString(): string } }) => warm && p.connected && !activeIds.has(p.identity.toHexString());
   const playing = online.filter(p => !isQuiet(p)).length;
   const rankOf = (p: (typeof players)[number]) => (!p.connected ? 2 : isQuiet(p) ? 1 : 0);
   const board = [...players].sort((a, b) => rankOf(a) - rankOf(b) || b.score - a.score).slice(0, 10);
@@ -159,8 +168,8 @@ export default function Display() {
         right={
           !inLobby && (
             <>
-              {running && current && <GameStatus level={current} now={now} />}
-              <StagePips stage={meta.stage ?? 1} stages={meta.stages ?? STAGES} running={running} />
+              {running && current && <GameStatus level={current} now={now} cursor={cursorPos} />}
+              {current?.kind !== 'vote' && <StagePips stage={meta.stage ?? 1} stages={meta.stages ?? STAGES} running={running} />}
               {timeLeft !== null && <span className={`timer ${timeLeft < 10 ? 'low' : ''}`}>{fmt(timeLeft)}</span>}
             </>
           )
@@ -276,7 +285,7 @@ export default function Display() {
 }
 
 /** Per-game status chips in the title bar: targets hit, bonks, lives + auto-click fuse. */
-function GameStatus({ level, now }: { level: LevelRow; now: number }) {
+function GameStatus({ level, now, cursor }: { level: LevelRow; now: number; cursor?: { x: number; y: number } }) {
   const p = JSON.parse(level.params);
   const prog = JSON.parse(level.progress);
   if (level.kind === 'targets')
@@ -286,6 +295,10 @@ function GameStatus({ level, now }: { level: LevelRow; now: number }) {
       </span>
     );
   if (level.kind === 'maze') return <span className="chip">BONKS {prog.hits}</span>;
+  if (level.kind === 'vote') {
+    const lead = cursor ? voteWinner(p.cards, cursor.x, cursor.y) : null;
+    return lead ? <span className="chip" style={{ background: GAME_META[lead.kind]?.color }}>LEADING: {GAME_META[lead.kind]?.exe}</span> : null;
+  }
   if (level.kind === 'minesweeper') {
     const fuse = prog.nextAutoAt ? Math.max(0, (prog.nextAutoAt - now) / 1000) : null;
     return (
@@ -354,9 +367,7 @@ function Intro({ kind, stage, count, rule }: { kind: string; stage: number; coun
     <div className="overlay">
       <Win title={`${gm.exe} — loading…`} color={gm.color} className="dialog intro">
         <div className="exe">{gm.title}</div>
-        <div className="stage">
-          STAGE {stage} / {STAGES}
-        </div>
+        <div className="stage">{kind === 'vote' ? `${VOTE_SECS} SECONDS TO DECIDE` : `STAGE ${stage} / ${STAGES}`}</div>
         <div className="goal">{gm.goal}</div>
         <span className="chip rule">CONTROL: {rule}</span>
         <div className="count" key={count}>
@@ -428,7 +439,7 @@ function Results(props: {
         </div>
         {props.nextIn !== null && (
           <div className="next-up">
-            NEXT: {GAME_META[nxt.kind]?.exe} STAGE {nxt.stage} {props.nextIn > 0 ? `IN ${props.nextIn}…` : 'LOADING…'}
+            NEXT: {nxt.kind === 'vote' ? 'VOTE FOR THE NEXT GAME' : `${GAME_META[nxt.kind]?.exe} STAGE ${nxt.stage}`} {props.nextIn > 0 ? `IN ${props.nextIn}…` : 'LOADING…'}
           </div>
         )}
       </Win>

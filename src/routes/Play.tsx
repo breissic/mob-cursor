@@ -3,7 +3,7 @@ import { tables, type DbConnection } from '../module_bindings';
 import { useConnState, usePoll, useRows } from '../lib/stdb';
 import { observeClock, serverNowMs } from '../lib/clock';
 import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
-import { COLORS, ghostKey, unpackGhosts, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
+import { COLORS, cursorPhysics, ghostKey, unpackGhosts, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
 import { drawField, drawLevel, GAME_META, parseLevel, type LevelView } from '../game/draw';
 import { blit, spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
@@ -217,7 +217,10 @@ function Remote({ conn, selfKey, color, name, score, team }: { conn: DbConnectio
 
       const cur = conn.db.cursor.id.find(0);
       const cfg = conn.db.config.id.find(0);
-      if (cur && cfg) rc = smoother.step(dt, cfg, running && cache ? cursorHoldUntilMs(cache.view) : 0);
+      if (cur && cfg) {
+        const phys = { ...cursorPhysics(running?.kind, cfg), tickHz: cfg.tickHz };
+        rc = smoother.step(dt, phys, running && cache ? cursorHoldUntilMs(cache.view) : 0);
+      }
 
       // World is stretched to fill the pad (pad position == world position).
       g.setTransform(sx, 0, 0, sy, 0, 0);
