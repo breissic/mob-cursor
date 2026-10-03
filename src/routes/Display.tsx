@@ -111,7 +111,18 @@ export default function Display() {
   const stats = usePoll(() => ({ ...(statsRef.current ?? { pointerPerSec: 0, votesPerSec: 0, ticksPerSec: 0, fps: 0 }) }), 1000);
 
   const online = players.filter(p => p.connected);
-  const board = [...players].sort((a, b) => Number(b.connected) - Number(a.connected) || b.score - a.score).slice(0, 10);
+  // "Active" = connected AND their pointer moved recently. Sleeping/backgrounded
+  // phones stay connected but go quiet; the server GCs their pointer after 10 s.
+  const activeIds = usePoll(() => {
+    const ids = new Set<string>();
+    const cutoff = serverNowMs() - 10000;
+    for (const p of conn?.db.pointer.iter() ?? []) if (Number(p.updatedAt.microsSinceUnixEpoch / 1000n) > cutoff) ids.add(p.identity.toHexString());
+    return ids;
+  }, 1000);
+  const isQuiet = (p: { connected: boolean; identity: { toHexString(): string } }) => p.connected && !activeIds.has(p.identity.toHexString());
+  const playing = online.filter(p => !isQuiet(p)).length;
+  const rankOf = (p: (typeof players)[number]) => (!p.connected ? 2 : isQuiet(p) ? 1 : 0);
+  const board = [...players].sort((a, b) => rankOf(a) - rankOf(b) || b.score - a.score).slice(0, 10);
 
   // Phase machine (all derived from server state + server clock).
   const meta = current ? metaOf(current) : {};
@@ -156,7 +167,7 @@ export default function Display() {
         }
       >
         <canvas ref={canvasRef} className="game-canvas" />
-        {inLobby && <Lobby qr={qr} players={online} />}
+        {inLobby && <Lobby qr={qr} players={online} quiet={isQuiet} />}
         {inIntro && current && <Intro kind={current.kind} stage={meta.stage ?? 1} count={countdown} rule={ruleTitle} />}
         {inResults && current && (
           <Results
@@ -194,7 +205,7 @@ export default function Display() {
               <div className="big">SCAN TO JOIN THE MOB</div>
               <div className="url">{playUrl().replace(/^https?:\/\//, '')}</div>
               <div className="chip" style={{ marginTop: 6 }}>
-                {online.length} online
+                {playing} playing{online.length > playing ? ` · ${online.length - playing} quiet` : ''}
               </div>
             </div>
           </div>
@@ -214,10 +225,13 @@ export default function Display() {
         <Win title="SCORES.TXT" color="#ffd23f" className="scores">
           <ol className="board">
             {board.map((p, i) => (
-              <li key={p.identity.toHexString()} className={`${i === 0 && p.score > 0 ? 'top1' : ''} ${p.connected ? '' : 'off'}`}>
+              <li key={p.identity.toHexString()} className={`${i === 0 && p.score > 0 ? 'top1' : ''} ${p.connected ? (isQuiet(p) ? 'quiet' : '') : 'off'}`} title={isQuiet(p) ? 'quiet: no input lately' : undefined}>
                 <span className="rank">{i + 1}</span>
                 <span className="swatch" style={{ background: p.color }} />
-                <span className="name">{p.name}</span>
+                <span className="name">
+                  {p.name}
+                  {isQuiet(p) && <em className="zzz"> zzz</em>}
+                </span>
                 <b>{p.score}</b>
               </li>
             ))}
@@ -302,7 +316,8 @@ function StagePips({ stage, stages, running }: { stage: number; stages: number; 
   );
 }
 
-function Lobby({ qr, players }: { qr: string; players: { identity: { toHexString(): string }; name: string; color: string }[] }) {
+type P = { identity: { toHexString(): string }; name: string; color: string; connected: boolean };
+function Lobby({ qr, players, quiet }: { qr: string; players: P[]; quiet: (p: P) => boolean }) {
   return (
     <div className="lobby">
       <Win title="JOIN.EXE" color="#ff4fa3" className="lobby-qr dialog">
@@ -321,7 +336,7 @@ function Lobby({ qr, players }: { qr: string; players: { identity: { toHexString
         <div className="tagline">One cursor. Everybody drives. Nobody agrees.</div>
         <div className="icons">
           {players.map((p, i) => (
-            <div className="icon" key={p.identity.toHexString()} style={{ animationDelay: `${(i % 12) * 40}ms` }}>
+            <div className={`icon ${quiet(p) ? 'quiet' : ''}`} key={p.identity.toHexString()} style={{ animationDelay: `${(i % 12) * 40}ms` }} title={quiet(p) ? 'quiet: no input lately' : undefined}>
               <img src={spriteUrl('cursor', p.color)} alt="" />
               <span>{p.name}</span>
             </div>

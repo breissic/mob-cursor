@@ -190,7 +190,11 @@ input:focus { background: #fffbe6; }
 .board li .rank { font-family: var(--display); font-size: 15px; }
 .board li.top1 { background: var(--yellow); }
 .board li b { font-family: var(--display); font-size: 16px; }
-.board li.off { opacity: 0.4; }
+/* Dim the children: the row's slide-up animation owns the row's own opacity. */
+.board li.off > * { opacity: 0.3; }
+.board li.quiet > * { opacity: 0.45; filter: grayscale(0.8); }
+.board .zzz { font-style: normal; color: var(--muted); font-size: 18px; animation: blink 1.6s steps(1) infinite; }
+.icon.quiet > * { opacity: 0.45; filter: grayscale(0.9); }
 .board .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .taskbar {

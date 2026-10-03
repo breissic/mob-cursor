@@ -624,6 +624,7 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   // 1 Hz: behaviour stats for awards + a replay/heatmap sample.
   if (tickNo % BigInt(cfg.tickHz) === 0n) {
     sampleStats(ctx, pts, body, target);
+    gcStalePointers(ctx, tNow);
     log(ctx, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
   }
 });
@@ -660,6 +661,17 @@ function writeGhostFrame(ctx: Ctx, pts: Pt[], dictator: string) {
     if (prev.data.length === data.length && prev.data.every((v, i) => v === data[i])) return; // idle room: no write
     ctx.db.ghostFrame.id.update({ ...prev, data });
   } else ctx.db.ghostFrame.insert({ id: 0, data });
+}
+
+/**
+ * Phones that sleep or get backgrounded often never send a clean disconnect,
+ * leaving a frozen pointer behind. Live clients heartbeat every 1 s, so any
+ * pointer silent for 10 s is dead: delete it (it is re-created on the next move).
+ */
+const POINTER_GC_US = 10_000_000n;
+function gcStalePointers(ctx: Ctx, tNow: bigint) {
+  for (const p of [...ctx.db.pointer.iter()])
+    if (tNow - p.updatedAt.microsSinceUnixEpoch > POINTER_GC_US) ctx.db.pointer.identity.delete(p.identity);
 }
 
 function sampleStats(ctx: Ctx, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
