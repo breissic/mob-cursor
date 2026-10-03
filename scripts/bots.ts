@@ -139,7 +139,9 @@ const result = {
   },
   errors,
 };
-console.log(JSON.stringify(result, null, 2));
+const out = JSON.stringify(result, null, 2);
+console.log(out);
+if (args.get('out')) (await import('node:fs')).writeFileSync(args.get('out')!, out + '\n');
 for (const b of bots) b.conn.disconnect();
 observer?.disconnect();
 process.exit(0);

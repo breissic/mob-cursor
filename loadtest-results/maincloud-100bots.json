@@ -1,0 +1,23 @@
+{
+  "host": "https://maincloud.spacetimedb.com",
+  "db": "mob-cursor-loadtest",
+  "bots": 100,
+  "seconds": 60.6,
+  "pointerHzEffective": 4,
+  "tickHz": 15,
+  "setPointerCallsPerSec": 351,
+  "clickCallsPerSec": 28.9,
+  "observedPointerUpdatesPerSec": 351,
+  "reducerLatencyMs": {
+    "p50": 30.3,
+    "p95": 38.7,
+    "p99": 124.2
+  },
+  "tick": {
+    "observedHz": 14.99,
+    "gapP50Ms": 66.7,
+    "gapP95Ms": 72.9,
+    "gapMaxMs": 177.2
+  },
+  "errors": 0
+}
