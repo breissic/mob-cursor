@@ -4,8 +4,9 @@
 //
 // Each bot joins, then moves its pointer like a (badly coordinated) human:
 // most drift toward a shared goal with noise, some troll in the opposite corner.
-// Bots obey config.pointerHzEffective, the 1% dead-band and the 1 s heartbeat,
-// exactly like the phone client. Prints call rates, reducer round-trip latency
+// Bots obey room.pointerHzEffective, the 1% dead-band and the 1 s heartbeat,
+// exactly like the phone client (there is no click reducer: the only
+// minesweeper reveal is the server auto-click). Prints call rates, reducer round-trip latency
 // and tick stability as JSON at the end.
 import { DbConnection, tables } from '../src/module_bindings/index.ts';
 
@@ -16,7 +17,7 @@ const DB = args.get('db') ?? process.env.STDB_DB ?? 'mob-cursor';
 const N = Number(args.get('bots') ?? 20);
 const SECONDS = Number(args.get('seconds') ?? 30);
 const TROLLS = Number(args.get('trolls') ?? 0.15);
-const CLICK_RATE = Number(args.get('clicks') ?? 0.3); // clicks per bot per second
+const ROOM = args.get('room') ?? ''; // '' = the default lobby
 const OBSERVER = args.get('observer') !== 'false';
 
 type Bot = { conn: DbConnection; troll: boolean; x: number; y: number; lastSent: { x: number; y: number } | null; lastAt: number };
@@ -24,7 +25,6 @@ type Bot = { conn: DbConnection; troll: boolean; x: number; y: number; lastSent:
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const lat: number[] = [];
 let sent = 0;
-let clicks = 0;
 let errors = 0;
 
 function connect(subscribe: (c: DbConnection) => unknown[]): Promise<DbConnection> {
@@ -50,7 +50,7 @@ const tickGaps: number[] = [];
 let pointerUpdates = 0;
 let observer: DbConnection | null = null;
 if (OBSERVER) {
-  observer = await connect(() => [tables.cursor, tables.pointer, tables.config]);
+  observer = await connect(() => [tables.cursor, tables.pointer, tables.config, tables.room]);
   let lastTick = 0;
   observer.db.cursor.onUpdate(() => {
     const t = performance.now();
@@ -63,9 +63,9 @@ if (OBSERVER) {
 
 const bots: Bot[] = [];
 for (let i = 0; i < N; i++) {
-  // Bots subscribe like phones: cursor + config only.
-  const conn = await connect(() => [tables.cursor, tables.config]);
-  await conn.reducers.join({ name: `bot${i}` });
+  // Bots subscribe like phones: cursor + config + their room only (never pointer).
+  const conn = await connect(() => [tables.cursor, tables.config, tables.room]);
+  await conn.reducers.join({ name: `bot${i}`, code: ROOM });
   bots.push({ conn, troll: i < N * TROLLS, x: Math.random(), y: Math.random(), lastSent: null, lastAt: 0 });
   if (i % 10 === 9) console.error(`connected ${i + 1}/${N}`);
 }
@@ -76,7 +76,7 @@ const goalTimer = setInterval(() => (goal = { x: 0.1 + Math.random() * 0.8, y: 0
 
 async function runBot(b: Bot) {
   while (performance.now() - t0 < SECONDS * 1000) {
-    const hz = b.conn.db.config.id.find(0)?.pointerHzEffective ?? 15;
+    const hz = [...b.conn.db.room.iter()].find(r => r.code === (ROOM || 'LOBBY'))?.pointerHzEffective ?? 15;
     const g = b.troll ? { x: 1 - goal.x, y: 1 - goal.y } : goal;
     b.x += (g.x - b.x) * 0.15 + (Math.random() - 0.5) * 0.04;
     b.y += (g.y - b.y) * 0.15 + (Math.random() - 0.5) * 0.04;
@@ -93,10 +93,6 @@ async function runBot(b: Bot) {
       b.lastSent = { x: b.x, y: b.y };
       b.lastAt = now;
       sent++;
-    }
-    if (Math.random() < CLICK_RATE / hz) {
-      clicks++;
-      b.conn.reducers.click({}).catch(() => errors++);
     }
     await sleep(1000 / Math.max(1, hz));
   }
@@ -119,16 +115,16 @@ const pct = (xs: number[], p: number) => {
 };
 const el = (performance.now() - t0) / 1000;
 const cfg = bots[0]?.conn.db.config.id.find(0);
+const room = [...(bots[0]?.conn.db.room.iter() ?? [])].find(r => r.code === (ROOM || 'LOBBY'));
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
 const result = {
   host: HOST,
   db: DB,
   bots: N,
   seconds: +el.toFixed(1),
-  pointerHzEffective: cfg?.pointerHzEffective,
+  pointerHzEffective: room?.pointerHzEffective,
   tickHz: cfg?.tickHz,
   setPointerCallsPerSec: +(sent / el).toFixed(1),
-  clickCallsPerSec: +(clicks / el).toFixed(1),
   observedPointerUpdatesPerSec: +(pointerUpdates / el).toFixed(1),
   reducerLatencyMs: { p50: +pct(lat, 50).toFixed(1), p95: +pct(lat, 95).toFixed(1), p99: +pct(lat, 99).toFixed(1) },
   tick: {

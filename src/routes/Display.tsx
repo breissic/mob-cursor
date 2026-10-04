@@ -1,34 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { tables } from '../module_bindings';
 import { useConnState, usePoll, useRows } from '../lib/stdb';
+import { useRoomByCode, useSubscribe } from '../lib/room';
 import { observeClock, serverNowMs } from '../lib/clock';
-import { playUrl } from '../config';
+import { playUrl, roomCodeFromUrl } from '../config';
 import { startRenderer, type RenderStats } from '../display/render';
 import { countdownBeep, disableSound, enableSound } from '../display/audio';
 import { GAME_META } from '../game/draw';
 import { spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
-import { isPlayKind, STAGES, VOTE_SECS, voteHover } from '../../spacetimedb/src/sim';
-
-export const RULE_LABEL: Record<string, [string, string]> = {
-  mean: ['DEMOCRACY', 'average of everyone'],
-  median: ['TROLL-PROOF', 'geometric median'],
-  activity: ['LOUDEST WINS', 'wiggle harder = more pull'],
-  tug: ['TUG OF WAR', 'red team vs blue team'],
-  dictator: ['DICTATORSHIP', 'one random ruler every few secs'],
-};
-
-type LevelRow = { id: bigint; kind: string; state: string; params: string; progress: string; score: number; endedAt?: { microsSinceUnixEpoch: bigint } | null; deadline: { microsSinceUnixEpoch: bigint } };
-
-const metaOf = (l: LevelRow) => JSON.parse(l.params) as { stage?: number; stages?: number; playAt?: number };
-
-/** Mirrors the server's nextUp: a won stage leads to the next stage; a lost run or a finished game opens the picker. */
-function nextUp(l: LevelRow) {
-  const stage = metaOf(l).stage ?? 1;
-  if (l.state !== 'lost' && stage < STAGES && isPlayKind(l.kind)) return { kind: l.kind, stage: stage + 1 };
-  return { kind: 'vote', stage: 0 };
-}
+import { fmt, GameStatus, Intro, phaseOf, Results, RULE_LABEL, StagePips, type LevelRow } from '../ui/Game';
+import { STAGES } from '../../spacetimedb/src/sim';
 
 export default function Display() {
   const { conn, status } = useConnState();
@@ -43,39 +26,48 @@ export default function Display() {
   linesRef.current = lines;
   const heatRef = useRef<[number, number][] | null>(null);
 
-  // Display subscribes to everything it draws (but not the private tables).
+  // The projector shows exactly one room: the code in the URL (the shared lobby when absent).
+  const [code] = useState(roomCodeFromUrl);
+  const room = useRoomByCode(code);
+  const roomId = room?.id ?? null;
+  // Once we know the room id, subscribe to everything the display draws for THAT room only.
+  useSubscribe(
+    () =>
+      roomId === null
+        ? null
+        : [
+            tables.cursor.where(r => r.id.eq(roomId)),
+            tables.pointer.where(r => r.roomId.eq(roomId)),
+            tables.player.where(r => r.roomId.eq(roomId)),
+            tables.level.where(r => r.roomId.eq(roomId)),
+            tables.award.where(r => r.roomId.eq(roomId)),
+            tables.commentary.where(r => r.roomId.eq(roomId)),
+            tables.fx.where(r => r.roomId.eq(roomId)),
+            tables.eventLog.where(r => r.roomId.eq(roomId).and(r.kind.ne('sample'))),
+          ],
+    [roomId]
+  );
+
   useEffect(() => {
-    if (!conn || status !== 'connected') return;
-    observeClock(conn);
-    const sub = conn
-      .subscriptionBuilder()
-      .subscribe([
-        tables.cursor,
-        tables.pointer,
-        tables.player,
-        tables.level,
-        tables.config,
-        tables.award,
-        tables.commentary,
-        tables.fx,
-        tables.eventLog.where(r => r.kind.ne('sample')),
-      ]);
-    return () => sub.unsubscribe();
+    if (conn && status === 'connected') observeClock(conn);
   }, [conn, status]);
 
   useEffect(() => {
-    if (!conn || !canvasRef.current) return;
-    const r = startRenderer(canvasRef.current, conn, { showLines: () => linesRef.current, heatmap: () => heatRef.current });
+    if (!conn || !canvasRef.current || roomId === null) return;
+    const id = roomId;
+    const r = startRenderer(canvasRef.current, conn, { showLines: () => linesRef.current, heatmap: () => heatRef.current, roomId: () => id });
     statsRef.current = r.stats;
     return () => r.stop();
-  }, [conn]);
+  }, [conn, roomId]);
 
+  const joinUrl = playUrl(code);
   useEffect(() => {
-    void QRCode.toDataURL(playUrl(), { margin: 1, width: 600, color: { dark: '#111111', light: '#ffffff' } }).then(setQr);
-  }, []);
+    void QRCode.toDataURL(joinUrl, { margin: 1, width: 600, color: { dark: '#111111', light: '#ffffff' } }).then(setQr);
+  }, [joinUrl]);
 
   const levels = useRows(c => c.db.level, 200) as LevelRow[];
-  const current = levels.reduce<LevelRow | null>((a, b) => (!a || b.id > a.id ? b : a), null);
+  // Current level is the room's pointer, never "newest level in the whole db".
+  const current = room && room.levelId ? (levels.find(l => l.id === room.levelId) ?? null) : null;
 
   // Heatmap: pull 1 Hz cursor samples for the current level on demand only.
   useEffect(() => {
@@ -101,15 +93,15 @@ export default function Display() {
     };
   }, [conn, heat, current?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const players = useRows(c => c.db.player, 400);
+  const players = useRows(c => c.db.player, 400).filter(p => p.roomId === roomId);
   const config = useRows(c => c.db.config, 250)[0];
   const awards = useRows(c => c.db.award, 250);
-  const commentary = useRows(c => c.db.commentary, 250);
+  const commentary = useRows(c => c.db.commentary, 250).filter(c => c.roomId === roomId);
   const events = useRows(c => c.db.eventLog, 500);
   const now = usePoll(serverNowMs, 200);
-  const chaos = usePoll(() => conn?.db.cursor.id.find(0)?.chaos ?? 0, 150);
+  const chaos = usePoll(() => (roomId === null ? 0 : (conn?.db.cursor.id.find(roomId)?.chaos ?? 0)), 150);
   const cursorPos = usePoll(() => {
-    const c = conn?.db.cursor.id.find(0);
+    const c = roomId === null ? undefined : conn?.db.cursor.id.find(roomId);
     return c ? { x: c.x, y: c.y } : undefined;
   }, 200);
   const stats = usePoll(() => ({ ...(statsRef.current ?? { pointerPerSec: 0, votesPerSec: 0, ticksPerSec: 0, fps: 0 }) }), 1000);
@@ -123,8 +115,10 @@ export default function Display() {
     for (const p of conn?.db.pointer.iter() ?? []) if (Number(p.updatedAt.microsSinceUnixEpoch / 1000n) > cutoff) ids.add(p.identity.toHexString());
     return ids;
   }, 1000);
-  // Give the pointer subscription a few seconds before calling anyone quiet.
+  // Give the pointer subscription a few seconds before calling anyone quiet
+  // (and the room subscription a few seconds before calling the code unknown).
   const [warm, setWarm] = useState(false);
+  const waited = warm;
   useEffect(() => {
     const id = window.setTimeout(() => setWarm(true), 3000);
     return () => clearTimeout(id);
@@ -132,20 +126,11 @@ export default function Display() {
   const isQuiet = (p: { connected: boolean; identity: { toHexString(): string } }) => warm && p.connected && !activeIds.has(p.identity.toHexString());
   const playing = online.filter(p => !isQuiet(p)).length;
   const rankOf = (p: (typeof players)[number]) => (!p.connected ? 2 : isQuiet(p) ? 1 : 0);
-  // Global leaderboard (all-time score this round) of everyone online right now.
+  // Room leaderboard (score this round) of everyone online right now.
   const board = [...online].sort((a, b) => rankOf(a) - rankOf(b) || b.score - a.score);
 
-  // Phase machine (all derived from server state + server clock).
-  const meta = current ? metaOf(current) : {};
-  const running = current?.state === 'running';
-  const endedMs = current?.endedAt ? Number(current.endedAt.microsSinceUnixEpoch / 1000n) : 0;
-  const inIntro = running && now < (meta.playAt ?? 0);
-  const ended = !!current && !running && current.state !== 'skipped' && now - endedMs < 25000;
-  // Hold the results dialog for 1.5 s so everyone sees the win/explosion on the board.
-  const inResults = ended && now - endedMs > 1500;
-  const inLobby = !current || (!running && !ended);
-  const countdown = inIntro ? Math.ceil(((meta.playAt ?? 0) - now) / 1000) : 0;
-  const timeLeft = running && !inIntro ? Math.max(0, Number(current!.deadline.microsSinceUnixEpoch / 1000n) - now) / 1000 : null;
+  // Phase machine (all derived from server state + server clock), shared with the phones.
+  const { meta, running, endedMs, inIntro, inResults, inLobby, countdown, timeLeft } = phaseOf(current, now);
 
   const lastCount = useRef(0);
   useEffect(() => {
@@ -156,11 +141,26 @@ export default function Display() {
     }
   }, [countdown]);
 
-  const gm = GAME_META[running || ended ? current!.kind : 'lobby'] ?? GAME_META.lobby;
+  const gm = GAME_META[current && !inLobby ? current.kind : 'lobby'] ?? GAME_META.lobby;
   const latestLine = commentary.reduce<(typeof commentary)[number] | null>((a, b) => (!a || b.id > a.id ? b : a), null);
   const showLine = latestLine && now - Number(latestLine.at.microsSinceUnixEpoch / 1000n) < 14000;
   const [ruleTitle, ruleSub] = RULE_LABEL[config?.rule ?? 'mean'] ?? [config?.rule ?? '', ''];
   const clock = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const shortUrl = joinUrl.replace(/^https?:\/\//, '');
+
+  if (!room) {
+    // Unknown code (or still loading): say so instead of drawing an empty desk.
+    return (
+      <div className="phone-center">
+        <Win title="DISPLAY.EXE" color="#ff5a36" className="join-win dialog">
+          <p>{status !== 'connected' ? 'Dialing up the mob…' : waited ? `No room with code ${code}.` : `Looking for room ${code}…`}</p>
+          <a className="btn" href={`${location.pathname}#/display`}>
+            Open the shared lobby instead
+          </a>
+        </Win>
+      </div>
+    );
+  }
 
   return (
     <div className="desk">
@@ -168,7 +168,7 @@ export default function Display() {
         className="game-win"
         color={gm.color}
         icon={spriteUrl('cursor', '#ffffff')}
-        title={inLobby ? 'MOBOS 95 — LOBBY.EXE' : `${gm.exe} — ${gm.title}`}
+        title={inLobby ? `MOBOS 95 — LOBBY.EXE · ROOM ${code}` : `${gm.exe} — ${gm.title}`}
         right={
           !inLobby && (
             <>
@@ -180,7 +180,7 @@ export default function Display() {
         }
       >
         <canvas ref={canvasRef} className="game-canvas" />
-        {inLobby && <Lobby qr={qr} players={online} quiet={isQuiet} />}
+        {inLobby && <Lobby qr={qr} url={shortUrl} code={code} players={online} quiet={isQuiet} />}
         {inIntro && current && <Intro kind={current.kind} stage={meta.stage ?? 1} count={countdown} rule={ruleTitle} />}
         {inResults && current && (
           <Results
@@ -200,11 +200,11 @@ export default function Display() {
         {hud && (
           <div className="hud">
             <div>CONN {status}</div>
+            <div>ROOM {code} #{roomId}</div>
             <div>set_pointer/s {stats.pointerPerSec.toFixed(0)}</div>
-            <div>click/s {stats.votesPerSec.toFixed(1)}</div>
             <div>tick/s {stats.ticksPerSec.toFixed(1)}</div>
-            <div>≈ calls/s {(stats.pointerPerSec + stats.votesPerSec + stats.ticksPerSec).toFixed(0)}</div>
-            <div>client Hz {config?.pointerHzEffective ?? '?'}</div>
+            <div>≈ calls/s {(stats.pointerPerSec + stats.ticksPerSec).toFixed(0)}</div>
+            <div>client Hz {room?.pointerHzEffective ?? '?'}</div>
             <div>fps {stats.fps.toFixed(0)}</div>
           </div>
         )}
@@ -216,7 +216,10 @@ export default function Display() {
             {qr && <img className="qr" src={qr} alt="Join QR code" />}
             <div>
               <div className="big">SCAN TO JOIN THE MOB</div>
-              <div className="url">{playUrl().replace(/^https?:\/\//, '')}</div>
+              <div className="room-code">
+                ROOM <b>{code}</b>
+              </div>
+              <div className="url">{shortUrl}</div>
               <div className="chip" style={{ marginTop: 6 }}>
                 {playing} playing{online.length > playing ? ` · ${online.length - playing} quiet` : ''}
               </div>
@@ -261,6 +264,7 @@ export default function Display() {
           {inLobby ? 'LOBBY' : gm.exe}
         </span>
         <span className="chip">{ruleTitle}</span>
+        <span className="chip">ROOM {code}</span>
         <div className="tray">
           <button onClick={() => setLines(l => !l)} className={lines ? 'on' : ''}>
             LINES
@@ -288,109 +292,16 @@ export default function Display() {
   );
 }
 
-/** Per-game status chips in the title bar: targets hit, bonks, lives + auto-click fuse. */
-function GameStatus({ level, now, cursor }: { level: LevelRow; now: number; cursor?: { x: number; y: number } }) {
-  const p = JSON.parse(level.params);
-  const prog = JSON.parse(level.progress);
-  if (level.kind === 'targets')
-    return (
-      <span className="chip">
-        <img src={spriteUrl('star')} alt="" style={{ height: 16 }} /> {prog.next}/{p.targets.length}
-      </span>
-    );
-  if (level.kind === 'maze') return <span className="chip">BONKS {prog.hits}</span>;
-  if (level.kind === 'vote') {
-    // The client only names the card the cursor is inside; the server decides.
-    const pick = cursor ? voteHover(p.cards, cursor.x, cursor.y) : null;
-    return pick ? (
-      <span className="chip" style={{ background: GAME_META[pick.kind]?.color }}>PICK: {GAME_META[pick.kind]?.exe}</span>
-    ) : (
-      <span className="chip" style={{ background: '#ff5a36' }}>NO PICK</span>
-    );
-  }
-  if (level.kind === 'redlight')
-    return (
-      <>
-        <span className="chip" style={{ background: prog.light === 'red' ? '#ff3b3b' : '#43e05a' }}>{prog.light === 'red' ? 'RED' : 'GREEN'}</span>
-        <span className="chip">FAULTS {prog.faults}/{p.faultCap}</span>
-      </>
-    );
-  if (level.kind === 'balloon')
-    return (
-      <span className="chip">
-        {Array.from({ length: p.dropCap }, (_, i) => (
-          <img key={i} src={spriteUrl(i < p.dropCap - prog.drops ? 'heart' : 'skull')} alt="" style={{ height: 16 }} />
-        ))}{' '}
-        · SAVES {prog.saves}
-      </span>
-    );
-  if (level.kind === 'mole')
-    return (
-      <>
-        <span className="chip">
-          <img src={spriteUrl('star')} alt="" style={{ height: 16 }} /> {prog.score}/{p.target}
-        </span>
-        <span className="chip">MISSES {prog.misses}/{p.missCap}</span>
-      </>
-    );
-  if (level.kind === 'potato') {
-    const fuse = Math.max(0, (prog.fuseAt - now) / 1000);
-    return (
-      <span className="chip" style={{ background: fuse < 3 ? '#ff3b3b' : '#fff' }}>
-        <img src={spriteUrl('bomb')} alt="" style={{ height: 16 }} /> FUSE {Math.ceil(fuse)}s
-      </span>
-    );
-  }
-  if (level.kind === 'chairs')
-    return (
-      <span className="chip">
-        {prog.left.length} CHAIR{prog.left.length === 1 ? '' : 'S'} · ROUND {prog.round}
-      </span>
-    );
-  if (level.kind === 'keyboard')
-    return (
-      <span className="chip" style={{ fontFamily: 'var(--pixel)', letterSpacing: 2 }}>
-        {String(p.word).slice(0, prog.next)}
-        <span style={{ opacity: 0.4 }}>{String(p.word).slice(prog.next)}</span>
-      </span>
-    );
-  if (level.kind === 'minesweeper') {
-    const fuse = prog.nextAutoAt ? Math.max(0, (prog.nextAutoAt - now) / 1000) : null;
-    return (
-      <>
-        <span className="chip">
-          {Array.from({ length: p.lives }, (_, i) => (
-            <img key={i} src={spriteUrl(i < prog.lives ? 'heart' : 'skull')} alt="" style={{ height: 16 }} />
-          ))}
-        </span>
-        <span className="chip" style={{ background: fuse !== null && fuse < 5 ? '#ff3b3b' : '#fff' }}>
-          <img src={spriteUrl('bomb')} alt="" style={{ height: 16 }} /> {p.mines} · AUTO-CLICK {fuse !== null && fuse < 5 ? `${Math.ceil(fuse)}s!` : '???'}
-        </span>
-      </>
-    );
-  }
-  return null;
-}
-
-const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-
-function StagePips({ stage, stages, running }: { stage: number; stages: number; running: boolean }) {
-  return (
-    <span className="stage-pips" title={`Stage ${stage} of ${stages}`}>
-      {Array.from({ length: stages }, (_, i) => (
-        <b key={i} className={i + 1 < stage || (!running && i + 1 === stage) ? 'done' : i + 1 === stage ? 'now' : ''} />
-      ))}
-    </span>
-  );
-}
-
 type P = { identity: { toHexString(): string }; name: string; color: string; connected: boolean };
-function Lobby({ qr, players, quiet }: { qr: string; players: P[]; quiet: (p: P) => boolean }) {
+function Lobby({ qr, url, code, players, quiet }: { qr: string; url: string; code: string; players: P[]; quiet: (p: P) => boolean }) {
   return (
     <div className="lobby">
       <Win title="JOIN.EXE" color="#ff4fa3" className="lobby-qr dialog">
         {qr && <img className="qr" src={qr} alt="Join QR code" />}
-        <div className="url">{playUrl().replace(/^https?:\/\//, '')}</div>
+        <div className="room-code big">
+          ROOM <b>{code}</b>
+        </div>
+        <div className="url">{url}</div>
       </Win>
       <div>
         <div className="logo">
@@ -412,92 +323,6 @@ function Lobby({ qr, players, quiet }: { qr: string; players: P[]; quiet: (p: P)
         </div>
         <div className="waiting">{players.length ? `${players.length} PLAYER${players.length > 1 ? 'S' : ''} READY — WAITING FOR HOST…` : 'WAITING FOR PLAYERS…'}</div>
       </div>
-    </div>
-  );
-}
-
-function Intro({ kind, stage, count, rule }: { kind: string; stage: number; count: number; rule: string }) {
-  const gm = GAME_META[kind] ?? GAME_META.lobby;
-  return (
-    <div className="overlay">
-      <Win title={`${gm.exe} — loading…`} color={gm.color} className="dialog intro">
-        <div className="exe">{gm.title}</div>
-        <div className="stage">{kind === 'vote' ? `${VOTE_SECS} SECONDS TO DECIDE` : `STAGE ${stage} / ${STAGES}`}</div>
-        <div className="goal">{gm.goal}</div>
-        <span className="chip rule">CONTROL: {rule}</span>
-        <div className="count" key={count}>
-          {count > 0 ? count : 'GO!'}
-        </div>
-      </Win>
-    </div>
-  );
-}
-
-function Results(props: {
-  level: LevelRow;
-  awards: { id: bigint; title: string; name: string; detail: string }[];
-  levelEnd?: string;
-  board: { identity: { toHexString(): string }; name: string; color: string; score: number }[];
-  nextIn: number | null;
-}) {
-  const { level } = props;
-  const gm = GAME_META[level.kind] ?? GAME_META.lobby;
-  const meta = metaOf(level);
-  const info = useMemo(() => (props.levelEnd ? (JSON.parse(props.levelEnd) as { seconds?: number; coop?: number }) : {}), [props.levelEnd]);
-  const won = level.state === 'won';
-  const nxt = nextUp(level);
-  const awardIcon = (t: string) => spriteUrl(t.includes('Troll') ? 'skull' : t.includes('MVP') ? 'crown' : t.includes('Goblin') ? 'star' : t.includes('Disagree') ? 'bomb' : 'trophy');
-  return (
-    <div className="overlay">
-      <Win title={`RESULTS.TXT — ${gm.exe} stage ${meta.stage ?? 1}`} color={won ? '#ffd23f' : '#ff5a36'} className="dialog results">
-        <div className={`verdict ${won ? 'won' : 'lost'}`}>{won ? 'STAGE CLEAR!' : 'FAILED!'}</div>
-        <div className="sub">{won ? 'The mob actually agreed on something.' : 'Democracy has failed you.'}</div>
-        <div className="cols">
-          <div>
-            <h4>THE NUMBERS</h4>
-            <div className="stat-row">
-              <span>Stage score</span>
-              <b>{level.score}</b>
-            </div>
-            <div className="stat-row">
-              <span>Time</span>
-              <b>{info.seconds !== undefined ? `${info.seconds}s` : '—'}</b>
-            </div>
-            <div className="stat-row">
-              <span>Cooperation</span>
-              <b>{info.coop !== undefined ? `${info.coop}%` : '—'}</b>
-            </div>
-            <h4 style={{ marginTop: 12 }}>LEADERBOARD</h4>
-            {props.board.map((p, i) => (
-              <div className="stat-row" key={p.identity.toHexString()}>
-                <span>
-                  {i + 1}. <span className="swatch" style={{ background: p.color }} /> {p.name}
-                </span>
-                <b>{p.score}</b>
-              </div>
-            ))}
-          </div>
-          <div>
-            <h4>AWARDS</h4>
-            {props.awards.length === 0 && <div>No awards. Nobody tried hard enough.</div>}
-            {props.awards.map((a, i) => (
-              <div className="award" key={a.id.toString()} style={{ animationDelay: `${300 + i * 250}ms` }}>
-                <img src={awardIcon(a.title)} alt="" />
-                <div>
-                  <div className="t">{a.title}</div>
-                  <div className="n">{a.name}</div>
-                  <small>{a.detail}</small>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        {props.nextIn !== null && (
-          <div className="next-up">
-            NEXT: {nxt.kind === 'vote' ? 'PICK THE NEXT GAME' : `${GAME_META[nxt.kind]?.exe} STAGE ${nxt.stage}`} {props.nextIn > 0 ? `IN ${props.nextIn}…` : 'LOADING…'}
-          </div>
-        )}
-      </Win>
     </div>
   );
 }

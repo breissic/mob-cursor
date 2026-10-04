@@ -10,18 +10,25 @@ export const SPACETIMEDB_DB: string =
 
 import { DEFAULT_ROOM_CODE, normalizeRoomCode } from '../spacetimedb/src/sim';
 
-/** Room code from `?room=CODE`; the shared lobby when absent or malformed. */
+/** Room code from `?room=CODE`, read live (the URL changes without a reload); the shared lobby when absent or malformed. */
 export function roomCodeFromUrl(): string {
-  return normalizeRoomCode(params.get('room') ?? '') || DEFAULT_ROOM_CODE;
+  return normalizeRoomCode(new URLSearchParams(location.search).get('room') ?? '') || DEFAULT_ROOM_CODE;
 }
 
-/** Same URL with `room` replaced (kept for `host`/`db` overrides). */
+/** Query string with `room` replaced (keeps `host`/`db` overrides). The default room has no param. */
 function withRoom(code: string): string {
   const q = new URLSearchParams(location.search);
-  if (code && code !== DEFAULT_ROOM_CODE) q.set('room', code);
+  const c = normalizeRoomCode(code);
+  if (c && c !== DEFAULT_ROOM_CODE) q.set('room', c);
   else q.delete('room');
   const s = q.toString();
   return s ? `?${s}` : '';
+}
+
+/** Point the address bar at `code` without reloading (hash route and other params kept). */
+export function setRoomInUrl(code: string): void {
+  const next = `${location.pathname}${withRoom(code)}${location.hash}`;
+  if (`${location.pathname}${location.search}${location.hash}` !== next) history.replaceState(history.state, '', next);
 }
 
 /** URL phones open from the QR code (same build, #/play route, same db overrides, this room's code). */
