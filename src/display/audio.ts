@@ -44,8 +44,22 @@ export function sfx(kind: string) {
       tone(600 + Math.random() * 300, 0.05, 'triangle', 0.03);
       return;
     }
-    case 'click':
-      return tone(880, 0.12, 'square', 0.08, 1320);
+    case 'hunt_found':
+    case 'station':
+      tone(880, 0.1, 'square', 0.08);
+      return setTimeout(() => tone(1320, 0.18, 'square', 0.08), 90);
+    case 'hunt_reset':
+    case 'station_cancel':
+    case 'valve_slip':
+      return tone(300, 0.2, 'triangle', 0.07, 180);
+    case 'valve_grab':
+      return tone(500, 0.08, 'triangle', 0.06, 700);
+    case 'valve_blow':
+      tone(90, 0.5, 'sawtooth', 0.14, 30);
+      return tone(1800, 0.3, 'triangle', 0.05, 200);
+    case 'valve_all_in':
+      [659, 784, 988].forEach((f, i) => setTimeout(() => tone(f, 0.15, 'square', 0.08), i * 80));
+      return;
     case 'target':
       tone(660, 0.1, 'square', 0.08);
       return setTimeout(() => tone(990, 0.15, 'square', 0.08), 90);

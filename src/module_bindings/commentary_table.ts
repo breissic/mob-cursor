@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   id: __t.u64().primaryKey(),
+  roomId: __t.u32().name("room_id"),
   at: __t.timestamp(),
   levelId: __t.u64().name("level_id"),
   text: __t.string(),

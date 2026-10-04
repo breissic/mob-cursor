@@ -31,6 +31,7 @@ export type AdminSecret = __Infer<typeof AdminSecret>;
 export const AdvanceSchedule = __t.object("AdvanceSchedule", {
   scheduledId: __t.u64(),
   scheduledAt: __t.scheduleAt(),
+  roomId: __t.u32(),
   afterLevelId: __t.u64(),
 });
 export type AdvanceSchedule = __Infer<typeof AdvanceSchedule>;
@@ -40,6 +41,7 @@ export type AmIAdmin = __Infer<typeof AmIAdmin>;
 
 export const Award = __t.object("Award", {
   id: __t.u64(),
+  roomId: __t.u32(),
   levelId: __t.u64(),
   title: __t.string(),
   who: __t.string(),
@@ -54,16 +56,9 @@ export const Banned = __t.object("Banned", {
 });
 export type Banned = __Infer<typeof Banned>;
 
-export const ClickVote = __t.object("ClickVote", {
-  identity: __t.identity(),
-  x: __t.f64(),
-  y: __t.f64(),
-  at: __t.timestamp(),
-});
-export type ClickVote = __Infer<typeof ClickVote>;
-
 export const Commentary = __t.object("Commentary", {
   id: __t.u64(),
+  roomId: __t.u32(),
   at: __t.timestamp(),
   levelId: __t.u64(),
   text: __t.string(),
@@ -75,17 +70,13 @@ export const Config = __t.object("Config", {
   rule: __t.string(),
   pointerHz: __t.f64(),
   pointerBudget: __t.f64(),
-  pointerHzEffective: __t.f64(),
   tickHz: __t.u32(),
   gain: __t.f64(),
   damping: __t.f64(),
   maxSpeed: __t.f64(),
   influenceCap: __t.f64(),
-  quorumMin: __t.u32(),
-  quorumFrac: __t.f64(),
-  quorumRadius: __t.f64(),
-  quorumWindowMs: __t.u32(),
   maxPlayers: __t.u32(),
+  maxRooms: __t.u32(),
   freshMs: __t.u32(),
   dictatorSecs: __t.f64(),
   autoAdvance: __t.bool(),
@@ -112,6 +103,7 @@ export type Cursor = __Infer<typeof Cursor>;
 
 export const EventLog = __t.object("EventLog", {
   id: __t.u64(),
+  roomId: __t.u32(),
   at: __t.timestamp(),
   kind: __t.string(),
   levelId: __t.u64(),
@@ -121,6 +113,7 @@ export const EventLog = __t.object("EventLog", {
 export type EventLog = __Infer<typeof EventLog>;
 
 export const Fx = __t.object("Fx", {
+  roomId: __t.u32(),
   kind: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
@@ -142,6 +135,7 @@ export type Idle = __Infer<typeof Idle>;
 
 export const Level = __t.object("Level", {
   id: __t.u64(),
+  roomId: __t.u32(),
   kind: __t.string(),
   state: __t.string(),
   params: __t.string(),
@@ -161,8 +155,16 @@ export const LevelSecret = __t.object("LevelSecret", {
 });
 export type LevelSecret = __Infer<typeof LevelSecret>;
 
+export const ModeSettings = __t.object("ModeSettings", {
+  kind: __t.string(),
+  json: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type ModeSettings = __Infer<typeof ModeSettings>;
+
 export const Player = __t.object("Player", {
   identity: __t.identity(),
+  roomId: __t.u32(),
   name: __t.string(),
   color: __t.string(),
   team: __t.u8(),
@@ -174,18 +176,19 @@ export type Player = __Infer<typeof Player>;
 
 export const PlayerStats = __t.object("PlayerStats", {
   identity: __t.identity(),
+  roomId: __t.u32(),
   samples: __t.u32(),
   activeSamples: __t.u32(),
   agree: __t.u32(),
   disagree: __t.u32(),
   distSum: __t.f64(),
   activitySum: __t.f64(),
-  clicks: __t.u32(),
 });
 export type PlayerStats = __Infer<typeof PlayerStats>;
 
 export const Pointer = __t.object("Pointer", {
   identity: __t.identity(),
+  roomId: __t.u32(),
   x: __t.f32(),
   y: __t.f32(),
   activity: __t.f32(),
@@ -198,6 +201,19 @@ export const PointerRate = __t.object("PointerRate", {
   tatUs: __t.u64(),
 });
 export type PointerRate = __Infer<typeof PointerRate>;
+
+export const Room = __t.object("Room", {
+  id: __t.u32(),
+  code: __t.string(),
+  name: __t.string(),
+  host: __t.identity(),
+  players: __t.u32(),
+  pointerHzEffective: __t.f64(),
+  levelId: __t.u64(),
+  createdAt: __t.timestamp(),
+  lastActiveAt: __t.timestamp(),
+});
+export type Room = __Infer<typeof Room>;
 
 export const Session = __t.object("Session", {
   connectionId: __t.connectionId(),

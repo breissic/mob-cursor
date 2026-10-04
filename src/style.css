@@ -163,6 +163,9 @@ input:focus { background: #fffbe6; }
 .join-body .qr { width: 132px; height: 132px; border: 3px solid var(--ink); background: #fff; flex: none; }
 .join-body .big { font-family: var(--display); font-size: 20px; line-height: 1.1; }
 .join-body .url { font-size: 18px; word-break: break-all; color: var(--muted); }
+.room-code { font-family: var(--display); font-size: 14px; margin: 4px 0; }
+.room-code b { font-size: 26px; letter-spacing: 4px; background: var(--ink); color: var(--yellow); padding: 0 8px; }
+.lobby-qr .room-code.big b { font-size: 40px; letter-spacing: 8px; }
 
 .meter { height: 26px; border: 3px solid var(--ink); background: #fff; position: relative; overflow: hidden; }
 .meter > i {
@@ -314,43 +317,98 @@ input:focus { background: #fffbe6; }
    PLAY (#/play) — the phone remote
    ================================================================ */
 body[data-route='play'] { overscroll-behavior: none; touch-action: none; }
-.phone { height: 100dvh; display: flex; flex-direction: column; padding: 10px; gap: 10px; user-select: none; -webkit-user-select: none; }
+/* Safe-area padding: the notch / home bar never eats the pad or the chrome. */
+.phone {
+  height: 100dvh;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  user-select: none; -webkit-user-select: none;
+}
 .phone .win { flex: 1; }
-.phone-center { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
+.phone-center {
+  min-height: 100dvh; display: grid; place-items: center;
+  padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  overflow: auto;
+}
 .join-win { width: min(420px, 100%); }
 .join-win .win-body { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
 .join-win .logo { font-size: 44px; -webkit-text-stroke: 2px var(--ink); text-shadow: 4px 4px 0 var(--ink); }
 .join-win p { margin: 0; font-size: 24px; line-height: 1; }
 .join-win .name-row { display: flex; gap: 8px; }
 .join-win .name-row input { flex: 1; min-width: 0; }
+.join-win .code-row { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 15px; }
+.join-win .code-row input { flex: 1; min-width: 0; font-family: var(--display); font-size: 26px; letter-spacing: 4px; text-transform: uppercase; }
+.join-win .code-hint { font-size: 20px; color: var(--muted); line-height: 1; margin-top: -6px; }
 .join-win .go { font-size: 22px; padding: 12px; justify-content: center; }
+.join-win button { justify-content: center; text-align: center; }
 .err { color: #c92a2a; font-size: 22px; }
 
-.remote .win-body { flex: 1; display: flex; flex-direction: column; padding: 0; min-height: 0; }
-.remote-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 3px solid var(--ink); background: var(--paper); font-size: 22px; }
-.remote-info .game { font-family: var(--display); font-size: 13px; }
-.remote-info .score { margin-left: auto; font-family: var(--display); font-size: 18px; }
-.pad { flex: 1; width: 100%; touch-action: none; display: block; background: var(--ink); min-height: 0; }
-.pad-wrap { flex: 1; position: relative; min-height: 0; display: flex; }
-.pad-banner {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  font-family: var(--display); font-size: 30px; text-align: center; line-height: 1;
-  background: var(--face); border: 3px solid var(--ink); box-shadow: var(--shadow);
-  padding: 12px 16px; pointer-events: none; animation: pop-in 300ms both; white-space: nowrap;
+/* The remote window: chrome above and below the pad, never on it. */
+.remote .win-bar .win-right { gap: 6px; }
+.remote .win-bar .timer { font-size: 16px; min-width: 60px; }
+.remote .win-body {
+  flex: 1; min-height: 0; padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
 }
-.pad-banner.count { font-size: 90px; color: var(--tomato); -webkit-text-stroke: 3px var(--ink); background: none; border: 0; box-shadow: none; }
-.click-btn {
-  font-family: var(--display); font-size: 30px;
-  padding: 18px; justify-content: center;
-  background: var(--tomato); color: #fff;
-  -webkit-text-stroke: 1px var(--ink);
-  box-shadow: 6px 6px 0 var(--ink);
-  border-width: 4px;
-}
-.click-btn:active { transform: translate(6px, 6px); box-shadow: 0 0 0 var(--ink); }
-.phone-foot { text-align: center; color: #fff; font-size: 18px; text-shadow: 1px 1px 0 var(--ink); }
+.phone-chrome { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-bottom: 3px solid var(--ink); background: var(--paper); }
+.phone-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 24px; }
+.phone-status .chip { font-size: 12px; padding: 1px 6px; }
+.phone-status .chip.me { color: #111; max-width: 46vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: inline-block; line-height: 1.5; }
+.phone-objective { font-size: 22px; line-height: 1; min-height: 1em; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* The pad: a 1:1 map of the 16x9 world (pad position == world position), as big as the phone allows. */
+.pad { width: 100%; height: 100%; touch-action: none; display: block; background: var(--ink); min-height: 0; }
+.pad-wrap { position: relative; min-height: 0; display: flex; }
+.pad-wrap .overlay { background: rgba(14, 111, 107, 0.7); padding: 6px; }
+/* Compact leaderboard under the pad: top 5 + you. */
+.board.compact { border-top: 3px solid var(--ink); background: var(--face); padding: 2px 6px; max-height: 30vh; overflow: auto; }
+.board.compact li { font-size: 19px; padding: 1px 4px; gap: 6px; grid-template-columns: 22px 14px 1fr auto; animation: none; }
+.board.compact li .rank { font-size: 12px; }
+.board.compact li b { font-size: 13px; }
+.board.compact li.me { background: #fffbd1; outline: 2px dashed var(--ink); outline-offset: -2px; }
+.board.compact li.top1.me { background: var(--yellow); }
+.phone-foot { text-align: center; color: #fff; font-size: 18px; line-height: 1; text-shadow: 1px 1px 0 var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phone-foot b { font-family: var(--display); font-size: 14px; letter-spacing: 2px; }
 .flash-mine { animation: flash 400ms; }
 @keyframes flash { 0% { box-shadow: inset 0 0 0 999px rgba(255,59,59,.6); } 100% { box-shadow: none; } }
+
+/* Compact dialogs (phone intro / results): fit a small screen, scroll if they must. */
+.dialog.compact { max-width: 100%; max-height: 100%; width: auto; }
+.dialog.compact .win-body { padding: 10px 12px; overflow: auto; max-height: calc(100% - 36px); }
+.intro.compact { width: min(360px, 100%); }
+.intro.compact .exe { font-size: 26px; }
+.intro.compact .stage { font-size: 14px; margin: 4px 0; }
+.intro.compact .goal { font-size: 22px; margin: 4px 0 6px; }
+.intro.compact .count { font-size: 72px; height: 76px; -webkit-text-stroke: 3px var(--ink); }
+.results.compact { width: min(420px, 100%); }
+.results.compact .verdict { font-size: 30px; -webkit-text-stroke: 2px var(--ink); }
+.results.compact .sub { font-size: 19px; margin: 2px 0 6px; }
+.results.compact .cols { grid-template-columns: 1fr; gap: 6px; }
+.results.compact .stat-row { font-size: 20px; }
+.results.compact .stat-row b { font-size: 14px; }
+.results.compact .award { margin-bottom: 3px; grid-template-columns: 26px 1fr; }
+.results.compact .award img { width: 22px; }
+.results.compact .award .n { font-size: 19px; }
+.results.compact .award small { font-size: 15px; }
+.results.compact .next-up { margin-top: 6px; font-size: 13px; padding: 4px; }
+
+/* Landscape phone: the pad takes the full height on the left, chrome stacks beside it. */
+@media (orientation: landscape) and (max-height: 540px) {
+  .phone { flex-direction: column; gap: 4px; }
+  .remote .win-body {
+    grid-template-columns: minmax(0, 1fr) clamp(170px, 36vw, 320px);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .pad-wrap { grid-column: 1; grid-row: 1 / -1; }
+  .phone-chrome { grid-column: 2; grid-row: 1; border-bottom: 3px solid var(--ink); border-left: 3px solid var(--ink); }
+  .phone-status .chip.me { max-width: 100%; }
+  .phone-objective { -webkit-line-clamp: 3; }
+  .board.compact { grid-column: 2; grid-row: 2; border-top: 0; border-left: 3px solid var(--ink); max-height: none; }
+  .phone-foot { font-size: 15px; }
+  .intro.compact .count { font-size: 48px; height: 52px; }
+  .intro.compact .goal { font-size: 18px; }
+}
 
 /* ================================================================
    HOME + ADMIN
@@ -373,6 +431,10 @@ body[data-route='admin'] { overflow: auto; }
 .knob { display: grid; grid-template-columns: 1fr 80px; gap: 2px 10px; margin: 6px 0; font-size: 20px; align-items: center; }
 .knob input { grid-column: 1 / -1; width: 100%; accent-color: var(--tomato); }
 .knob b { text-align: right; font-family: var(--display); font-size: 14px; }
+.knob small { grid-column: 1 / -1; font-size: 17px; line-height: 1; color: var(--muted); margin-top: -2px; }
+.admin .grid2.modes { gap: 0 18px; margin-top: 6px; }
+.admin .stage-preview { display: block; margin-top: 8px; font-size: 17px; line-height: 1.15; color: var(--muted); word-break: break-word; }
+.admin .stage-preview b { font-family: var(--display); font-size: 11px; color: var(--ink); margin-right: 6px; }
 .check { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 22px; }
 .msg { min-height: 1.2em; font-size: 22px; }
 @media (max-width: 860px) { .admin .grid2 { grid-template-columns: 1fr; } }

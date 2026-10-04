@@ -6,6 +6,7 @@
 //
 //   ANTHROPIC_API_KEY=...            (omit for DRY_RUN canned lines)
 //   STDB_HOST=https://maincloud.spacetimedb.com STDB_DB=mob-cursor-live
+//   STDB_ROOM=LOBBY                  (room code to commentate; one worker per room)
 //   ADMIN_PASSPHRASE=...             (the one set with admin_set_passphrase)
 //   npm start
 import fs from 'node:fs';
@@ -14,6 +15,7 @@ import { DbConnection, tables } from '../../src/module_bindings/index.ts';
 
 const HOST = process.env.STDB_HOST ?? 'https://maincloud.spacetimedb.com';
 const DB = process.env.STDB_DB ?? 'mob-cursor-live';
+const ROOM = (process.env.STDB_ROOM ?? 'LOBBY').trim().toUpperCase();
 const PASSPHRASE = process.env.ADMIN_PASSPHRASE ?? '';
 const TOKEN_FILE = new URL(`../.stdb-token-${DB}`, import.meta.url);
 const MIN_GAP_MS = Number(process.env.MIN_GAP_MS ?? 7000); // cost + readability cap
@@ -53,14 +55,7 @@ const conn: DbConnection = await new Promise((resolve, reject) => {
       c.subscriptionBuilder()
         .onApplied(() => resolve(c))
         .onError(ctx => reject(ctx.event ?? new Error('subscription failed')))
-        .subscribe([
-          tables.amIAdmin,
-          tables.eventLog.where(r => r.kind.ne('sample')),
-          tables.level,
-          tables.player,
-          tables.cursor,
-          tables.config,
-        ]);
+        .subscribe([tables.amIAdmin, tables.config, tables.room.where(r => r.code.eq(ROOM))]);
     })
     .onConnectError((_ctx, e) => reject(e))
     .onDisconnect(() => {
@@ -76,6 +71,24 @@ if (conn.db.amIAdmin.count() === 0n) {
   console.log('claimed admin');
 }
 
+// One worker commentates one room: everything below is scoped to its id.
+const room = [...conn.db.room.iter()].find(r => r.code === ROOM);
+if (!room) throw new Error(`no room with code ${ROOM}`);
+const ROOM_ID = room.id;
+await new Promise<void>((resolve, reject) => {
+  conn
+    .subscriptionBuilder()
+    .onApplied(() => resolve())
+    .onError(ctx => reject(ctx.event ?? new Error('subscription failed')))
+    .subscribe([
+      tables.eventLog.where(r => r.roomId.eq(ROOM_ID).and(r.kind.ne('sample'))),
+      tables.level.where(r => r.roomId.eq(ROOM_ID)),
+      tables.player.where(r => r.roomId.eq(ROOM_ID)),
+      tables.cursor.where(r => r.id.eq(ROOM_ID)),
+    ]);
+});
+console.log(`commentating room ${ROOM} (#${ROOM_ID})`);
+
 const nameOf = (hex: string) => {
   for (const p of conn.db.player.iter()) if (p.identity.toHexString() === hex) return p.name;
   return hex ? 'someone' : '';
@@ -89,15 +102,16 @@ const URGENT = new Set(['level_end', 'mine', 'round_reset', 'dictator', 'level_s
 // Only react to events that happen after we start (rows from the initial subscription are history).
 conn.db.eventLog.onInsert((ctx, row) => {
   if (ctx.event.tag === 'SubscribeApplied') return;
+  if (row.roomId !== ROOM_ID) return;
   pending.push({ kind: row.kind, who: nameOf(row.who), payload: row.payload, at: Date.now() });
   if (pending.length > 60) pending.splice(0, pending.length - 60);
   if (URGENT.has(row.kind)) urgent = true;
 });
 
 function situation() {
-  let lvl = null as ReturnType<typeof conn.db.level.id.find>;
-  for (const l of conn.db.level.iter()) if (!lvl || l.id > lvl.id) lvl = l;
-  const cur = conn.db.cursor.id.find(0);
+  const levelId = conn.db.room.id.find(ROOM_ID)?.levelId ?? 0n;
+  const lvl = levelId ? conn.db.level.id.find(levelId) : undefined;
+  const cur = conn.db.cursor.id.find(ROOM_ID);
   const online = [...conn.db.player.iter()].filter(p => p.connected);
   return {
     level: lvl ? { kind: lvl.kind, state: lvl.state, progress: JSON.parse(lvl.progress) } : null,
@@ -143,7 +157,7 @@ async function speak() {
       .trim();
   }
   if (!line) return;
-  await conn.reducers.postCommentary({ text: line.slice(0, 280) });
+  await conn.reducers.postCommentary({ roomId: ROOM_ID, text: line.slice(0, 280) });
   console.log(`🎙 ${line}`);
 }
 

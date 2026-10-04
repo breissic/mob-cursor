@@ -10,7 +10,8 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  roomId: __t.u32(),
-  text: __t.string(),
-};
+export default __t.row({
+  kind: __t.string().primaryKey(),
+  json: __t.string(),
+  updatedAt: __t.timestamp().name("updated_at"),
+});

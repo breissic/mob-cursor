@@ -1,6 +1,6 @@
 import type { DbConnection } from '../module_bindings';
-import { cursorPhysics, WORLD_H, WORLD_W, type MinesProgress } from '../../spacetimedb/src/sim';
-import { drawCursorSprite, drawField, drawFuse, drawLevel, fieldColor, nameTag, parseLevel, worldText, type LevelView } from '../game/draw';
+import { cursorPhysics, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
+import { drawCursorSprite, drawField, drawLevel, fieldColor, nameTag, parseLevel, worldText, type LevelView } from '../game/draw';
 import { blit } from '../game/sprites';
 import { serverNowMs } from '../lib/clock';
 import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
@@ -39,7 +39,7 @@ const CONFETTI = ['#ff5a36', '#ffd23f', '#2ec4b6', '#3a86ff', '#ff4fa3', '#fffff
 export function startRenderer(
   canvas: HTMLCanvasElement,
   conn: DbConnection,
-  opts: { showLines: () => boolean; heatmap: () => [number, number][] | null }
+  opts: { showLines: () => boolean; heatmap: () => [number, number][] | null; roomId: () => number }
 ) {
   const g = canvas.getContext('2d')!;
   const stats: RenderStats = { pointerPerSec: 0, votesPerSec: 0, ticksPerSec: 0, fps: 0 };
@@ -68,7 +68,9 @@ export function startRenderer(
     counters.ticks++;
     smoother.push(row);
   };
-  const onFx = (_c: unknown, row: { kind: string; x: number; y: number; who: string }) => {
+  const onFx = (_c: unknown, row: { roomId: number; kind: string; x: number; y: number; who: string }) => {
+    // The subscription is already room-scoped, but a room switch can race it.
+    if (row.roomId !== opts.roomId()) return;
     sfx(row.kind);
     const add = (p: Partial<Particle> & Pick<Particle, 'kind' | 'life'>) =>
       particles.push({ x: row.x, y: row.y, vx: 0, vy: 0, rot: 0, vr: 0, max: p.life, color: '#fff', size: 0.5, ...p });
@@ -76,10 +78,6 @@ export function startRenderer(
       case 'vote':
         counters.votes++;
         add({ kind: 'ring', life: 0.5, color: playerOf(row.who)?.color ?? '#fff', size: 0.7 });
-        break;
-      case 'click':
-        add({ kind: 'ring', life: 0.7, color: '#111', size: 1.8 });
-        add({ kind: 'text', life: 0.9, text: 'CLICK!', color: '#ffd23f', size: 0.55, vy: -1.2 });
         break;
       case 'autoclick':
         shake = 0.5;
@@ -134,13 +132,50 @@ export function startRenderer(
           flash = 0.5;
           flashColor = '255,59,59';
           add({ kind: 'text', life: 1.1, text: 'RED LIGHT!', color: '#ff3b3b', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
-        } else add({ kind: 'text', life: 1, text: 'GREEN LIGHT!', color: '#43e05a', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        } else if (row.who === 'fake') add({ kind: 'text', life: 0.9, text: 'PSYCH!', color: '#ffd23f', size: 0.8, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        else add({ kind: 'text', life: 1, text: 'GREEN LIGHT!', color: '#43e05a', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
         break;
       case 'fault':
         shake = 0.8;
         flash = 0.6;
         flashColor = '255,59,59';
-        add({ kind: 'text', life: 1.3, text: 'YOU MOVED!', color: '#ff3b3b', size: 0.8, vy: -0.8 });
+        add({ kind: 'text', life: 1.3, text: 'YOU MOVED! BACK!', color: '#ff3b3b', size: 0.8, vy: -0.8 });
+        break;
+      // Hunt.
+      case 'hunt_found':
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 24);
+        add({ kind: 'text', life: 1.2, text: 'FOUND IT!', color: '#ffd23f', size: 0.9, vy: -1 });
+        break;
+      case 'hunt_reset':
+        shake = 0.3;
+        add({ kind: 'text', life: 0.9, text: 'SLIPPED!', color: '#ff5a36', size: 0.6, vy: -0.8 });
+        break;
+      // Valves.
+      case 'valve_grab':
+        add({ kind: 'ring', life: 0.5, color: '#ffd23f', size: 1 });
+        break;
+      case 'valve_blow':
+        shake = 1;
+        flash = 0.7;
+        flashColor = '255,138,61';
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 24);
+        add({ kind: 'text', life: 1.4, text: 'BLOWOUT!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
+        break;
+      case 'valve_all_in':
+        add({ kind: 'text', life: 1.2, text: 'ALL GREEN! HOLD!', color: '#43e05a', size: 0.8, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      case 'valve_slip':
+        shake = 0.3;
+        add({ kind: 'text', life: 1, text: 'SLIPPED OUT!', color: '#ff5a36', size: 0.7, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      // Stations.
+      case 'station':
+        burst(row.x, row.y, 20);
+        add({ kind: 'text', life: 1, text: 'STAMPED!', color: '#7048e8', size: 0.7, vy: -1 });
+        break;
+      case 'station_cancel':
+        shake = 0.3;
+        add({ kind: 'text', life: 1, text: 'TOO EARLY!', color: '#ff5a36', size: 0.6, vy: -0.8 });
         break;
       // Balloon.
       case 'save':
@@ -228,8 +263,8 @@ export function startRenderer(
 
   let lvlCache: { id: bigint; params: string; progress: string; view: LevelView } | null = null;
   const currentLevel = () => {
-    let best = null as ReturnType<typeof conn.db.level.id.find>;
-    for (const l of conn.db.level.iter()) if (!best || l.id > best.id) best = l;
+    const room = conn.db.room.id.find(opts.roomId());
+    const best = room && room.levelId ? conn.db.level.id.find(room.levelId) : undefined;
     if (!best) return null;
     if (!lvlCache || lvlCache.id !== best.id || lvlCache.params !== best.params || lvlCache.progress !== best.progress) {
       lvlCache = { id: best.id, params: best.params, progress: best.progress, view: parseLevel(best)! };
@@ -295,7 +330,7 @@ export function startRenderer(
     }
 
     // Cursor prediction: run the server's spring forward from the last tick.
-    const cur = conn.db.cursor.id.find(0);
+    const cur = conn.db.cursor.id.find(opts.roomId());
     const cfg = conn.db.config.id.find(0);
     if (cur && cfg) {
       const phys = { ...cursorPhysics(running?.row.kind, cfg), tickHz: cfg.tickHz };
@@ -367,15 +402,6 @@ export function startRenderer(
     // The one true cursor: big, white, jittery when the mob is fighting.
     const jitter = (cur?.chaos ?? 0) > 0.6 ? (cur!.chaos - 0.6) * 0.15 : 0;
     drawCursorSprite(g, rc.x + (Math.random() - 0.5) * jitter, rc.y + (Math.random() - 0.5) * jitter, 1.1, '#ffffff');
-
-    // Minesweeper auto-click fuse (last 5 s).
-    if (running && running.row.kind === 'minesweeper') {
-      const next = (running.view.progress as MinesProgress).nextAutoAt;
-      if (next !== undefined) {
-        const left = (next - serverMs) / 1000;
-        if (left > 0 && left <= 5 && serverMs >= running.view.playAt) drawFuse(g, rc.x, rc.y, left, px);
-      }
-    }
 
     // Particles.
     for (let i = particles.length - 1; i >= 0; i--) {

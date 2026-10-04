@@ -2,58 +2,76 @@ import { ScheduleAt, Timestamp, type Identity } from 'spacetimedb';
 import { SenderError, t, type InferSchema, type ReducerCtx } from 'spacetimedb/server';
 import spacetimedb, { advanceSchedule, tickSchedule } from './schema';
 import {
-  AUTO_CLICK_MAX_MS,
   COLORS,
-  AUTO_CLICK_MIN_MS,
   COUNTDOWN_S,
+  DEFAULT_ROOM_CODE,
+  DEFAULT_ROOM_ID,
   LEVEL_ROTATION,
+  MAX_PLAYERS_CEILING,
+  MAX_ROOMS_CEILING,
+  ROOM_IDLE_S,
   RULES,
   STAGES,
-  STAGE_SPECS,
   VOTE_SECS,
   VOTE_START,
-  targetPos,
-  voteLayout,
-  voteResolve,
-  type VoteParams,
-  type VoteProgress,
-  type StageMeta,
   WORLD_H,
   WORLD_W,
   aggregate,
+  autoClickMs,
   balloonStep,
   cellAt,
   chairsStep,
   chaos as chaosOf,
   clamp,
   cursorPhysics,
+  dampingMax,
+  gainMax,
   ghostKey,
+  huntStep,
+  integrate,
   isPlayKind,
   keyboardStep,
-  packGhosts,
-  integrate,
   makeBalloons,
   makeChairs,
+  makeHunt,
   makeKeyboard,
   makeMaze,
   makeMines,
   makeMoles,
   makePotato,
   makeRedlight,
+  makeRoomCode,
+  makeStations,
   makeTargets,
+  makeValves,
   mazeHit,
   moleStep,
-  potatoInBucket,
+  normalizeRoomCode,
+  packGhosts,
+  pointerHzFor,
+  potatoStep,
   redlightStep,
   revealCell,
+  sanitizeSettings,
+  settingsFor,
   sha256Hex,
   shiftLevelTimes,
+  stageSeconds,
+  stageSpec,
+  stationsStep,
+  targetPos,
   tileAt,
   tileCenter,
+  valvesStep,
+  voteLayout,
+  voteResolve,
   type BalloonParams,
   type BalloonProgress,
   type ChairsParams,
   type ChairsProgress,
+  type HuntParams,
+  type HuntProgress,
+  type HuntSecret,
   type KeyboardParams,
   type KeyboardProgress,
   type MazeParams,
@@ -69,20 +87,32 @@ import {
   type RedlightParams,
   type RedlightProgress,
   type Rule,
+  type StageMeta,
+  type StationsParams,
+  type StationsProgress,
   type TargetsParams,
   type TargetsProgress,
+  type ValvesParams,
+  type ValvesProgress,
+  type VoteParams,
+  type VoteProgress,
 } from './sim';
 
 export default spacetimedb;
 
 type Ctx = ReducerCtx<InferSchema<typeof spacetimedb>>;
-
+type RoomRow = NonNullable<ReturnType<Ctx['db']['room']['id']['find']>>;
+type LevelRow = NonNullable<ReturnType<Ctx['db']['level']['id']['find']>>;
 
 const MICROS = 1_000_000n;
 /** set_pointer may run this many rate-limit intervals ahead before calls are dropped. */
 const POINTER_BURST = 4n;
+/** Seconds between a level ending and the next one starting (and before a fresh room's first game). */
+const ADVANCE_S = 10n;
+const FIRST_GAME_S = 5n;
 
 const now = (ctx: Ctx) => ctx.timestamp.microsSinceUnixEpoch;
+const nowMs = (ctx: Ctx) => Number(now(ctx) / 1000n);
 const ts = (micros: bigint) => new Timestamp(micros);
 const hex = (id: Identity) => id.toHexString();
 
@@ -96,32 +126,36 @@ function getConfig(ctx: Ctx) {
   return c;
 }
 
-function getCursor(ctx: Ctx) {
-  const c = ctx.db.cursor.id.find(0);
-  if (!c) throw new Error('cursor row missing');
+function getRoom(ctx: Ctx, roomId: number): RoomRow {
+  const r = ctx.db.room.id.find(roomId);
+  if (!r) throw new SenderError('no such room');
+  return r;
+}
+
+function getCursor(ctx: Ctx, roomId: number) {
+  const c = ctx.db.cursor.id.find(roomId);
+  if (!c) throw new Error(`cursor row missing for room ${roomId}`);
   return c;
 }
 
-function currentLevel(ctx: Ctx) {
-  let best: ReturnType<typeof ctx.db.level.id.find> = null;
-  for (const l of ctx.db.level.iter()) if (!best || l.id > best.id) best = l;
-  return best;
+function currentLevel(ctx: Ctx, room: RoomRow): LevelRow | null {
+  return room.levelId === 0n ? null : (ctx.db.level.id.find(room.levelId) ?? null);
 }
 
-function log(ctx: Ctx, kind: string, who: string, payload: unknown) {
-  const lvl = currentLevel(ctx);
+function log(ctx: Ctx, roomId: number, kind: string, who: string, payload: unknown) {
   ctx.db.eventLog.insert({
     id: 0n,
+    roomId,
     at: ctx.timestamp,
     kind,
-    levelId: lvl?.id ?? 0n,
+    levelId: ctx.db.room.id.find(roomId)?.levelId ?? 0n,
     who,
     payload: JSON.stringify(payload ?? {}),
   });
 }
 
-function fx(ctx: Ctx, kind: string, x: number, y: number, who = '') {
-  ctx.db.fx.insert({ kind, x, y, who });
+function fx(ctx: Ctx, roomId: number, kind: string, x: number, y: number, who = '') {
+  ctx.db.fx.insert({ roomId, kind, x, y, who });
 }
 
 function isAdmin(ctx: Ctx) {
@@ -132,23 +166,48 @@ function requireAdmin(ctx: Ctx) {
   if (!isAdmin(ctx)) throw new SenderError('not an admin');
 }
 
-function connectedPlayerCount(ctx: Ctx) {
+/** Room-level controls: global admins, or the identity that created the room. */
+function requireHost(ctx: Ctx, room: RoomRow) {
+  if (!isAdmin(ctx) && !room.host.isEqual(ctx.sender)) throw new SenderError('not the host of this room');
+}
+
+function roomPlayers(ctx: Ctx, roomId: number) {
   let n = 0;
-  for (const p of ctx.db.player.iter()) if (p.connected) n++;
+  for (const p of ctx.db.player.roomId.filter(roomId)) if (p.connected) n++;
   return n;
 }
 
-/** Energy lever: shrink the per-client pointer rate as the room grows. */
-function recomputePointerHz(ctx: Ctx) {
-  const c = getConfig(ctx);
-  const n = Math.max(1, connectedPlayerCount(ctx));
-  const eff = Math.round(clamp(Math.min(c.pointerHz, c.pointerBudget / n), 1, 30) * 10) / 10;
-  if (eff !== c.pointerHzEffective) ctx.db.config.id.update({ ...c, pointerHzEffective: eff });
+function anyoneOnline(ctx: Ctx) {
+  for (const r of ctx.db.room.iter()) if (r.players > 0) return true;
+  return false;
 }
 
-/** Tick runs only while at least one player is connected: zero idle burn. */
+/**
+ * Recount a room's connected players and its share of the pointer budget
+ * (energy lever: the per-client rate shrinks as the room grows; the budget is
+ * per room so a full room never starves the others). A room waking up from
+ * empty resumes its paused level.
+ */
+function refreshRoom(ctx: Ctx, roomId: number) {
+  const room = ctx.db.room.id.find(roomId);
+  if (!room) return;
+  const cfg = getConfig(ctx);
+  const players = roomPlayers(ctx, roomId);
+  const eff = pointerHzFor(cfg.pointerHz, cfg.pointerBudget, players);
+  const woke = room.players === 0 && players > 0;
+  if (players !== room.players || eff !== room.pointerHzEffective) {
+    ctx.db.room.id.update({ ...room, players, pointerHzEffective: eff, lastActiveAt: ctx.timestamp });
+  }
+  if (woke) {
+    const cur = getCursor(ctx, roomId);
+    resumeLevel(ctx, getRoom(ctx, roomId), now(ctx) - cur.lastTickAt.microsSinceUnixEpoch);
+    ctx.db.cursor.id.update({ ...getCursor(ctx, roomId), lastTickAt: ctx.timestamp });
+  }
+}
+
+/** Tick runs only while at least one player is connected somewhere: zero idle burn. */
 function syncTickSchedule(ctx: Ctx) {
-  const want = connectedPlayerCount(ctx) > 0 && !getConfig(ctx).paused;
+  const want = anyoneOnline(ctx) && !getConfig(ctx).paused;
   const rows = [...ctx.db.tickSchedule.iter()];
   if (want && rows.length === 0) {
     const hz = getConfig(ctx).tickHz;
@@ -156,26 +215,40 @@ function syncTickSchedule(ctx: Ctx) {
       scheduledId: 0n,
       scheduledAt: ScheduleAt.interval(MICROS / BigInt(hz)),
     });
-    const cur = getCursor(ctx);
-    resumeLevel(ctx, now(ctx) - cur.lastTickAt.microsSinceUnixEpoch);
-    // Reset dt so the first tick after a pause does not jump.
-    ctx.db.cursor.id.update({ ...getCursor(ctx), lastTickAt: ctx.timestamp });
+    // The whole tick was stopped (pause / rate change): every live room resumes.
+    for (const room of [...ctx.db.room.iter()]) {
+      if (room.players === 0) continue;
+      const cur = getCursor(ctx, room.id);
+      resumeLevel(ctx, room, now(ctx) - cur.lastTickAt.microsSinceUnixEpoch);
+      // Reset dt so the first tick after a pause does not jump.
+      ctx.db.cursor.id.update({ ...getCursor(ctx, room.id), lastTickAt: ctx.timestamp });
+    }
   } else if (!want) {
     for (const r of rows) ctx.db.tickSchedule.scheduledId.delete(r.scheduledId);
-    // Nobody left to draw: clear the phones' ghost frame so stale ghosts don't flash on return.
-    const gf = ctx.db.ghostFrame.id.find(0);
-    if (gf && gf.data.length > 1) ctx.db.ghostFrame.id.update({ ...gf, data: packGhosts([]) });
+    // Nobody left to draw: clear the phones' ghost frames so stale ghosts don't flash on return.
+    for (const gf of [...ctx.db.ghostFrame.iter()]) if (gf.data.length > 1) ctx.db.ghostFrame.id.update({ ...gf, data: packGhosts([]) });
   }
 }
 
+/** Deadline for a running level given its (possibly shifted) params and progress. */
+function deadlineUs(kind: string, params: StageMeta & Record<string, unknown>, prog: Record<string, unknown>, fallbackUs: bigint): bigint {
+  if (kind === 'vote') return BigInt((prog as VoteProgress).endsAt) * 1000n;
+  if (kind === 'potato') {
+    const p = params as unknown as PotatoParams;
+    const pr = prog as unknown as PotatoProgress;
+    return BigInt(pr.fuseAt) * 1000n + BigInt(Math.max(0, p.rounds - pr.round - 1) * p.fuseS) * MICROS + 2n * MICROS;
+  }
+  return fallbackUs;
+}
+
 /**
- * The tick stops while nobody is connected (or the host pauses), but level
+ * A room's tick stops while nobody is in it (or the host pauses), but level
  * deadlines are wall-clock times. Without this, a stage that was running when
  * the room emptied "fails" the instant the tick comes back. Long pauses get a
  * fresh 3-2-1 countdown; short ones (re-arming after a tickHz change) just shift.
  */
-function resumeLevel(ctx: Ctx, pausedUs: bigint) {
-  const l = currentLevel(ctx);
+function resumeLevel(ctx: Ctx, room: RoomRow, pausedUs: bigint) {
+  const l = currentLevel(ctx, room);
   if (!l || l.state !== 'running' || pausedUs <= 0n) return;
   const params = JSON.parse(l.params) as StageMeta & Record<string, unknown>;
   const lastTickUs = now(ctx) - pausedUs;
@@ -185,23 +258,17 @@ function resumeLevel(ctx: Ctx, pausedUs: bigint) {
   const remainingUs = sincePause < sinceStart ? sincePause : sinceStart;
   const fresh = pausedUs > 2n * MICROS;
   const playAt = fresh ? nowMs(ctx) + COUNTDOWN_S * 1000 : (params.playAt ?? 0) + Number(pausedUs / 1000n);
-  let deadlineUs = fresh
+  const generic = fresh
     ? BigInt(playAt) * 1000n + (remainingUs > 10n * MICROS ? remainingUs : 10n * MICROS)
     : l.deadline.microsSinceUnixEpoch + pausedUs;
   // Every in-progress timer (light flips, fuses, music stops...) moves with playAt.
   let pr = shiftLevelTimes(JSON.parse(l.progress) as Record<string, unknown>, playAt - (params.playAt ?? 0));
-  if (l.kind === 'minesweeper') pr = { ...pr, nextAutoAt: playAt + randMs(ctx) };
-  if (l.kind === 'vote') {
-    // The picker timer is always exactly VOTE_SECS after play resumes.
-    deadlineUs = BigInt(playAt) * 1000n + BigInt(VOTE_SECS) * MICROS;
-    pr = { ...pr, endsAt: Number(deadlineUs / 1000n) };
-  }
-  if (l.kind === 'potato') deadlineUs = BigInt((pr as PotatoProgress).fuseAt) * 1000n + MICROS;
-  ctx.db.level.id.update({ ...l, params: JSON.stringify({ ...params, playAt }), progress: JSON.stringify(pr), deadline: ts(deadlineUs) });
+  if (l.kind === 'vote') pr = { ...pr, endsAt: playAt + VOTE_SECS * 1000 }; // the picker timer is always exactly VOTE_SECS after play resumes
+  ctx.db.level.id.update({ ...l, params: JSON.stringify({ ...params, playAt }), progress: JSON.stringify(pr), deadline: ts(deadlineUs(l.kind, params, pr, generic)) });
   if (fresh) {
     const s = startPos(l.kind, params);
-    resetCursorTo(ctx, s.x, s.y);
-    log(ctx, 'level_resume', '', { kind: l.kind, pausedS: Number(pausedUs / MICROS) });
+    resetCursorTo(ctx, room.id, s.x, s.y);
+    log(ctx, room.id, 'level_resume', '', { kind: l.kind, pausedS: Number(pausedUs / MICROS) });
   }
 }
 
@@ -216,7 +283,7 @@ function markIdle(ctx: Ctx, identity: Identity, since: Timestamp) {
 
 /** 1 Hz: players idle for IDLE_AWAY_S are marked gone (connected = false). */
 function sweepIdle(ctx: Ctx, tNow: bigint) {
-  let changed = false;
+  const touched = new Set<number>();
   for (const row of [...ctx.db.idle.iter()]) {
     const p = ctx.db.player.identity.find(row.identity);
     if (!p || !p.connected) {
@@ -227,13 +294,12 @@ function sweepIdle(ctx: Ctx, tNow: bigint) {
     ctx.db.player.identity.update({ ...p, connected: false });
     ctx.db.pointer.identity.delete(row.identity);
     ctx.db.pointerRate.identity.delete(row.identity);
-    ctx.db.clickVote.identity.delete(row.identity);
     ctx.db.idle.identity.delete(row.identity);
-    log(ctx, 'leave', hex(row.identity), { name: p.name, reason: 'idle' });
-    changed = true;
+    log(ctx, p.roomId, 'leave', hex(row.identity), { name: p.name, reason: 'idle' });
+    touched.add(p.roomId);
   }
-  if (changed) {
-    recomputePointerHz(ctx);
+  if (touched.size) {
+    for (const r of touched) refreshRoom(ctx, r);
     syncTickSchedule(ctx);
   }
 }
@@ -247,8 +313,8 @@ function refreshPresence(ctx: Ctx, identity: Identity) {
     ctx.db.pointer.identity.delete(identity);
     ctx.db.idle.identity.delete(identity);
     ctx.db.pointerRate.identity.delete(identity);
-    ctx.db.clickVote.identity.delete(identity);
   }
+  if (p.connected !== online) refreshRoom(ctx, p.roomId);
 }
 
 function sanitizeName(raw: string, ctx: Ctx) {
@@ -257,22 +323,117 @@ function sanitizeName(raw: string, ctx: Ctx) {
   return s || `Anon${ctx.random.integerInRange(1000, 9999)}`;
 }
 
-function resetStats(ctx: Ctx) {
-  for (const s of [...ctx.db.playerStats.iter()]) ctx.db.playerStats.identity.delete(s.identity);
+function resetStats(ctx: Ctx, roomId: number) {
+  for (const s of [...ctx.db.playerStats.roomId.filter(roomId)]) ctx.db.playerStats.identity.delete(s.identity);
 }
 
-function resetCursorTo(ctx: Ctx, x: number, y: number) {
-  const c = getCursor(ctx);
+function resetCursorTo(ctx: Ctx, roomId: number, x: number, y: number) {
+  const c = getCursor(ctx, roomId);
   ctx.db.cursor.id.update({ ...c, x, y, vx: 0, vy: 0, tx: x, ty: y });
+}
+
+// ---------------------------------------------------------------------------
+// Rooms
+// ---------------------------------------------------------------------------
+
+function insertRoom(ctx: Ctx, id: number, code: string, name: string, host: Identity) {
+  ctx.db.room.insert({ id, code, name, host, players: 0, pointerHzEffective: getConfig(ctx).pointerHz, levelId: 0n, createdAt: ctx.timestamp, lastActiveAt: ctx.timestamp });
+  ctx.db.cursor.insert({
+    id,
+    x: WORLD_W / 2,
+    y: WORLD_H / 2,
+    vx: 0,
+    vy: 0,
+    tx: WORLD_W / 2,
+    ty: WORLD_H / 2,
+    chaos: 0,
+    active: 0,
+    tick: 0n,
+    lastTickAt: ctx.timestamp,
+    dictator: '',
+    dictatorUntil: ctx.timestamp,
+  });
+  ctx.db.ghostFrame.insert({ id, data: packGhosts([]) });
+}
+
+function createRoom(ctx: Ctx, name: string): RoomRow {
+  const cfg = getConfig(ctx);
+  let count = 0;
+  let maxId = 0;
+  for (const r of ctx.db.room.iter()) {
+    count++;
+    if (r.id > maxId) maxId = r.id;
+  }
+  if (count >= Math.min(cfg.maxRooms, MAX_ROOMS_CEILING)) throw new SenderError('no free rooms right now');
+  let code = '';
+  for (let i = 0; i < 50 && !code; i++) {
+    const c = makeRoomCode(() => ctx.random());
+    if (!ctx.db.room.code.find(c)) code = c;
+  }
+  if (!code) throw new SenderError('could not allocate a room code');
+  const id = maxId + 1;
+  insertRoom(ctx, id, code, name, ctx.sender);
+  log(ctx, id, 'room_create', hex(ctx.sender), { code, name });
+  return getRoom(ctx, id);
+}
+
+/** Move a player between rooms: their live state belongs to the old room. */
+function movePlayer(ctx: Ctx, identity: Identity, roomId: number) {
+  const p = ctx.db.player.identity.find(identity);
+  if (!p || p.roomId === roomId) return;
+  ctx.db.pointer.identity.delete(identity);
+  ctx.db.pointerRate.identity.delete(identity);
+  ctx.db.playerStats.identity.delete(identity);
+  ctx.db.player.identity.update({ ...p, roomId });
+  if (!ctx.db.pointer.identity.find(identity)) markIdle(ctx, identity, ctx.timestamp);
+  refreshRoom(ctx, p.roomId);
+  refreshRoom(ctx, roomId);
+}
+
+/** Everything a room owns, then the room. Players who were in it (all offline) fall back to the default room. */
+function deleteRoom(ctx: Ctx, room: RoomRow) {
+  for (const l of [...ctx.db.level.roomId.filter(room.id)]) {
+    ctx.db.levelSecret.levelId.delete(l.id);
+    ctx.db.level.id.delete(l.id);
+  }
+  for (const a of [...ctx.db.award.roomId.filter(room.id)]) ctx.db.award.id.delete(a.id);
+  for (const e of [...ctx.db.eventLog.roomId.filter(room.id)]) ctx.db.eventLog.id.delete(e.id);
+  for (const c of [...ctx.db.commentary.roomId.filter(room.id)]) ctx.db.commentary.id.delete(c.id);
+  for (const a of [...ctx.db.advanceSchedule.iter()]) if (a.roomId === room.id) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+  for (const s of [...ctx.db.playerStats.roomId.filter(room.id)]) ctx.db.playerStats.identity.delete(s.identity);
+  for (const p of [...ctx.db.player.roomId.filter(room.id)]) ctx.db.player.identity.update({ ...p, roomId: DEFAULT_ROOM_ID });
+  ctx.db.cursor.id.delete(room.id);
+  ctx.db.ghostFrame.id.delete(room.id);
+  ctx.db.room.id.delete(room.id);
+}
+
+/** 1 Hz: empty rooms (never the default one) are deleted after ROOM_IDLE_S. */
+function gcRooms(ctx: Ctx, tNow: bigint) {
+  for (const room of [...ctx.db.room.iter()]) {
+    if (room.id === DEFAULT_ROOM_ID || room.players > 0) continue;
+    if (tNow - room.lastActiveAt.microsSinceUnixEpoch < BigInt(ROOM_IDLE_S) * MICROS) continue;
+    deleteRoom(ctx, room);
+  }
+}
+
+/** A room that has never run a game starts its first one shortly after someone shows up. */
+function ensureStarted(ctx: Ctx, room: RoomRow) {
+  if (!getConfig(ctx).autoAdvance || room.levelId !== 0n) return;
+  for (const a of ctx.db.advanceSchedule.iter()) if (a.roomId === room.id) return;
+  scheduleAdvance(ctx, room.id, 0n, FIRST_GAME_S);
+}
+
+function scheduleAdvance(ctx: Ctx, roomId: number, afterLevelId: bigint, secs: bigint) {
+  ctx.db.advanceSchedule.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.time(now(ctx) + secs * MICROS), roomId, afterLevelId });
+}
+
+function clearAdvance(ctx: Ctx, roomId: number) {
+  for (const a of [...ctx.db.advanceSchedule.iter()]) if (a.roomId === roomId) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
 }
 
 // ---------------------------------------------------------------------------
 // Levels
 // ---------------------------------------------------------------------------
-
-const nowMs = (ctx: Ctx) => Number(now(ctx) / 1000n);
-const randMs = (ctx: Ctx) =>
-  AUTO_CLICK_MIN_MS + Math.floor(ctx.random() * (AUTO_CLICK_MAX_MS - AUTO_CLICK_MIN_MS));
 
 function stageOf(l: { params: string }): number {
   return (JSON.parse(l.params) as Partial<StageMeta>).stage ?? 1;
@@ -281,93 +442,85 @@ function playAtOf(l: { params: string }): number {
   return (JSON.parse(l.params) as Partial<StageMeta>).playAt ?? 0;
 }
 
-/** Where the cursor waits during the countdown (and respawns in the maze / after a red-light fault). */
+/** Where the cursor waits during the countdown (and respawns in the maze). */
 function startPos(kind: string, params: unknown) {
   if (kind === 'vote') return VOTE_START;
   if (kind === 'maze') {
     const m = params as MazeParams;
     return tileCenter(m, m.start.c, m.start.r);
   }
-  if (kind === 'redlight') return (params as RedlightParams).start;
+  if (kind === 'redlight') return (params as RedlightParams).path[0];
   return { x: WORLD_W / 2, y: WORLD_H / 2 };
 }
 
-function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
+function startLevel(ctx: Ctx, room: RoomRow, kind: PlayKind, stage = 1) {
   stage = Math.max(1, Math.min(STAGES, Math.round(stage)));
-  const cur = currentLevel(ctx);
-  if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
-  for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
-  for (const a of [...ctx.db.advanceSchedule.iter()])
-    ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
-  resetStats(ctx);
+  const cur = currentLevel(ctx, room);
+  if (cur && cur.state === 'running') endLevel(ctx, room, cur.id, 'skipped');
+  clearAdvance(ctx, room.id);
+  resetStats(ctx, room.id);
 
   const rand = () => ctx.random();
   const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
   const meta: StageMeta = { stage, stages: STAGES, playAt };
+  // Admin-saved stage-1 defaults, hardened for later stages.
+  const sp = stageSpec(kind, stage, settingsFor(kind, ctx.db.modeSettings.kind.find(kind)?.json));
   let params: object = {};
   let progress: object = {};
   let secret: string | null = null;
-  let secs = 60;
+  const secs = stageSeconds(kind, sp);
   if (kind === 'targets') {
-    const sp = STAGE_SPECS.targets[stage - 1];
     params = makeTargets(rand, sp.n, sp.r, sp.move);
     progress = { next: 0 } satisfies TargetsProgress;
-    secs = sp.secs;
   } else if (kind === 'maze') {
-    const sp = STAGE_SPECS.maze[stage - 1];
     params = makeMaze(rand, sp.cw, sp.ch);
     progress = { hits: 0, frozenUntil: 0 } satisfies MazeProgress;
-    secs = sp.secs;
   } else if (kind === 'minesweeper') {
-    const sp = STAGE_SPECS.minesweeper[stage - 1];
-    const m = makeMines(rand, sp.cols, sp.rows, sp.mines);
+    const m = makeMines(rand, sp.cols, sp.rows, sp.mines, sp.autoMinS, sp.autoMaxS);
     params = m.params;
-    progress = { ...m.progress, nextAutoAt: playAt + randMs(ctx) } satisfies MinesProgress;
+    progress = { ...m.progress, nextAutoAt: playAt + autoClickMs(m.params, rand) } satisfies MinesProgress;
     secret = m.secret;
-    secs = sp.secs;
   } else if (kind === 'redlight') {
-    const sp = STAGE_SPECS.redlight[stage - 1];
     ({ params, progress } = makeRedlight(rand, sp, playAt));
-    secs = sp.secs;
   } else if (kind === 'balloon') {
-    const sp = STAGE_SPECS.balloon[stage - 1];
     ({ params, progress } = makeBalloons(rand, sp, playAt));
-    secs = sp.secs;
   } else if (kind === 'mole') {
-    const sp = STAGE_SPECS.mole[stage - 1];
     ({ params, progress } = makeMoles(sp, playAt));
-    secs = sp.secs;
   } else if (kind === 'potato') {
-    const sp = STAGE_SPECS.potato[stage - 1];
     ({ params, progress } = makePotato(rand, sp, playAt));
-    // The stage ends when the fuse does; the deadline is only a safety net.
-    secs = sp.fuseS + 1;
   } else if (kind === 'chairs') {
-    const sp = STAGE_SPECS.chairs[stage - 1];
     ({ params, progress } = makeChairs(rand, sp, playAt));
-    secs = sp.secs;
   } else if (kind === 'keyboard') {
-    const sp = STAGE_SPECS.keyboard[stage - 1];
-    ({ params, progress } = makeKeyboard(rand, sp));
-    secs = sp.secs;
+    ({ params, progress } = makeKeyboard(rand, sp, stage));
+  } else if (kind === 'hunt') {
+    const h = makeHunt(rand, sp, playAt);
+    params = h.params;
+    progress = h.progress;
+    secret = JSON.stringify(h.secret);
+  } else if (kind === 'valves') {
+    ({ params, progress } = makeValves(rand, sp, playAt));
+  } else if (kind === 'stations') {
+    ({ params, progress } = makeStations(rand, sp));
   }
   const start = startPos(kind, params);
   const row = ctx.db.level.insert({
     id: 0n,
+    roomId: room.id,
     kind,
     state: 'running',
     params: JSON.stringify({ ...params, ...meta }),
     progress: JSON.stringify(progress),
     startedAt: ctx.timestamp,
-    deadline: ts(BigInt(playAt) * 1000n + BigInt(secs) * MICROS),
+    deadline: ts(BigInt(playAt) * 1000n + BigInt(Math.round(secs)) * MICROS),
     endedAt: undefined,
     score: 0,
     chaosSum: 0,
     ticks: 0,
   });
   if (secret !== null) ctx.db.levelSecret.insert({ levelId: row.id, data: secret });
-  resetCursorTo(ctx, start.x, start.y);
-  log(ctx, 'level_start', '', { kind, stage, levelId: row.id.toString() });
+  ctx.db.room.id.update({ ...getRoom(ctx, room.id), levelId: row.id });
+  resetCursorTo(ctx, room.id, start.x, start.y);
+  log(ctx, room.id, 'level_start', '', { kind, stage, levelId: row.id.toString() });
 }
 
 /**
@@ -375,8 +528,8 @@ function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
  * the picker). A game runs stage 1..STAGES; once all three are done, or the run
  * is lost, the mob picks the next game. There is no fixed rotation.
  */
-function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } | 'vote' {
-  const cur = currentLevel(ctx);
+function nextUp(ctx: Ctx, room: RoomRow): { kind: PlayKind; stage: number } | 'vote' {
+  const cur = currentLevel(ctx, room);
   if (!cur || !isPlayKind(cur.kind) || cur.state === 'skipped') {
     return { kind: LEVEL_ROTATION[ctx.random.integerInRange(0, LEVEL_ROTATION.length - 1)], stage: 1 };
   }
@@ -385,18 +538,17 @@ function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } | 'vote' {
   return 'vote';
 }
 
-function startNext(ctx: Ctx) {
-  const n = nextUp(ctx);
-  if (n === 'vote') startVote(ctx);
-  else startLevel(ctx, n.kind, n.stage);
+function startNext(ctx: Ctx, room: RoomRow) {
+  const n = nextUp(ctx, room);
+  if (n === 'vote') startVote(ctx, room);
+  else startLevel(ctx, room, n.kind, n.stage);
 }
 
 /** Picker round: one card per game; the card the cursor is inside when the timer hits zero is the next game. */
-function startVote(ctx: Ctx) {
-  const cur = currentLevel(ctx);
-  if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
-  for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
-  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+function startVote(ctx: Ctx, room: RoomRow) {
+  const cur = currentLevel(ctx, room);
+  if (cur && cur.state === 'running') endLevel(ctx, room, cur.id, 'skipped');
+  clearAdvance(ctx, room.id);
   const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
   const endsAt = playAt + VOTE_SECS * 1000;
   const params: VoteParams & StageMeta = {
@@ -407,8 +559,9 @@ function startVote(ctx: Ctx) {
     playAt,
   };
   const progress: VoteProgress = { endsAt, restarts: 0 };
-  ctx.db.level.insert({
+  const row = ctx.db.level.insert({
     id: 0n,
+    roomId: room.id,
     kind: 'vote',
     state: 'running',
     params: JSON.stringify(params),
@@ -420,8 +573,9 @@ function startVote(ctx: Ctx) {
     chaosSum: 0,
     ticks: 0,
   });
-  resetCursorTo(ctx, VOTE_START.x, VOTE_START.y);
-  log(ctx, 'vote_start', '', {});
+  ctx.db.room.id.update({ ...getRoom(ctx, room.id), levelId: row.id });
+  resetCursorTo(ctx, room.id, VOTE_START.x, VOTE_START.y);
+  log(ctx, room.id, 'vote_start', '', {});
 }
 
 /**
@@ -429,29 +583,27 @@ function startVote(ctx: Ctx) {
  * returns where its cursor starts. Cursor in a gap: restart the timer, picker
  * stays up, returns null.
  */
-function resolveVote(ctx: Ctx, levelId: bigint, x: number, y: number) {
-  const l = ctx.db.level.id.find(levelId);
-  if (!l || l.state !== 'running') return null;
+function resolveVote(ctx: Ctx, room: RoomRow, l: LevelRow, x: number, y: number) {
   const p = JSON.parse(l.params) as VoteParams;
   const prog = JSON.parse(l.progress) as VoteProgress;
   const r = voteResolve(p, prog, x, y, nowMs(ctx));
   if (!('chosen' in r)) {
     ctx.db.level.id.update({ ...l, progress: JSON.stringify(r.prog), deadline: ts(BigInt(r.prog.endsAt) * 1000n) });
-    fx(ctx, 'vote_restart', x, y);
-    log(ctx, 'vote_restart', '', { restarts: r.prog.restarts });
+    fx(ctx, room.id, 'vote_restart', x, y);
+    log(ctx, room.id, 'vote_restart', '', { restarts: r.prog.restarts });
     return null;
   }
   const win = r.chosen;
   ctx.db.level.id.update({ ...l, state: 'won', endedAt: ctx.timestamp, progress: JSON.stringify({ ...prog, chosen: win.kind }) });
-  fx(ctx, 'voted', win.x + win.w / 2, win.y + win.h / 2, win.kind);
-  log(ctx, 'vote_result', '', { chosen: win.kind });
+  fx(ctx, room.id, 'voted', win.x + win.w / 2, win.y + win.h / 2, win.kind);
+  log(ctx, room.id, 'vote_result', '', { chosen: win.kind });
   if (!isPlayKind(win.kind)) return null;
-  startLevel(ctx, win.kind, 1);
-  const nl = currentLevel(ctx);
+  startLevel(ctx, getRoom(ctx, room.id), win.kind, 1);
+  const nl = currentLevel(ctx, getRoom(ctx, room.id));
   return nl ? startPos(nl.kind, JSON.parse(nl.params)) : null;
 }
 
-function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') {
+function endLevel(ctx: Ctx, room: RoomRow, levelId: bigint, state: 'won' | 'lost' | 'skipped') {
   const l = ctx.db.level.id.find(levelId);
   if (!l || l.state !== 'running') return;
   const elapsed = Number(now(ctx) - l.startedAt.microsSinceUnixEpoch) / 1e6;
@@ -467,22 +619,16 @@ function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') 
 
   if (state !== 'skipped') {
     // Everyone who actually showed up for this level shares the team score.
-    for (const s of ctx.db.playerStats.iter()) {
+    for (const s of ctx.db.playerStats.roomId.filter(room.id)) {
       const p = ctx.db.player.identity.find(s.identity);
       if (p && s.activeSamples > 0) ctx.db.player.identity.update({ ...p, score: p.score + score });
     }
-    giveAwards(ctx, levelId);
-    const c = getCursor(ctx);
-    fx(ctx, state === 'won' ? 'win' : 'lose', c.x, c.y);
-    if (getConfig(ctx).autoAdvance) {
-      ctx.db.advanceSchedule.insert({
-        scheduledId: 0n,
-        scheduledAt: ScheduleAt.time(now(ctx) + 10n * MICROS),
-        afterLevelId: levelId,
-      });
-    }
+    giveAwards(ctx, room, levelId);
+    const c = getCursor(ctx, room.id);
+    fx(ctx, room.id, state === 'won' ? 'win' : 'lose', c.x, c.y);
+    if (getConfig(ctx).autoAdvance) scheduleAdvance(ctx, room.id, levelId, ADVANCE_S);
   }
-  log(ctx, 'level_end', '', {
+  log(ctx, room.id, 'level_end', '', {
     kind: l.kind,
     stage: stageOf(l),
     state,
@@ -492,9 +638,9 @@ function endLevel(ctx: Ctx, levelId: bigint, state: 'won' | 'lost' | 'skipped') 
   });
 }
 
-function giveAwards(ctx: Ctx, levelId: bigint) {
+function giveAwards(ctx: Ctx, room: RoomRow, levelId: bigint) {
   type S = { id: Identity; name: string; v: number; detail: string };
-  const rows = [...ctx.db.playerStats.iter()].filter(s => s.samples > 0);
+  const rows = [...ctx.db.playerStats.roomId.filter(room.id)].filter(s => s.samples > 0);
   if (rows.length === 0) return;
   const named = (pick: (s: (typeof rows)[number]) => number, detail: (v: number) => string): S[] =>
     rows.map(s => {
@@ -505,29 +651,19 @@ function giveAwards(ctx: Ctx, levelId: bigint) {
   const best = (xs: S[]) => xs.reduce((a, b) => (b.v > a.v ? b : a));
   const grant = (title: string, s: S) => {
     if (!(s.v > 0)) return; // nobody earned it
-    ctx.db.award.insert({ id: 0n, levelId, title, who: hex(s.id), name: s.name, detail: s.detail });
-    log(ctx, 'award', hex(s.id), { title, name: s.name, detail: s.detail });
+    ctx.db.award.insert({ id: 0n, roomId: room.id, levelId, title, who: hex(s.id), name: s.name, detail: s.detail });
+    log(ctx, room.id, 'award', hex(s.id), { title, name: s.name, detail: s.detail });
   };
 
   const active = rows.filter(s => s.activeSamples > 0);
   if (active.length > 0) {
     const ratio = (a: number, b: number) => (a + b > 0 ? a / (a + b) : 0);
-    grant(
-      'Most Disagreeable Player',
-      best(named(s => ratio(s.disagree, s.agree), v => `pulled against the mob ${Math.round(v * 100)}% of the time`).filter(x => active.some(a => a.identity.isEqual(x.id))))
-    );
-    grant(
-      'Biggest Troll',
-      best(named(s => (s.activeSamples ? s.distSum / s.activeSamples : 0), v => `parked ${v.toFixed(1)} units from the cursor on average`).filter(x => active.some(a => a.identity.isEqual(x.id))))
-    );
-    grant(
-      'MVP (Most Valuable Puppet)',
-      best(named(s => ratio(s.agree, s.disagree), v => `agreed with the mob ${Math.round(v * 100)}% of the time`).filter(x => active.some(a => a.identity.isEqual(x.id))))
-    );
+    const onlyActive = (xs: S[]) => xs.filter(x => active.some(a => a.identity.isEqual(x.id)));
+    grant('Most Disagreeable Player', best(onlyActive(named(s => ratio(s.disagree, s.agree), v => `pulled against the mob ${Math.round(v * 100)}% of the time`))));
+    grant('Biggest Troll', best(onlyActive(named(s => (s.activeSamples ? s.distSum / s.activeSamples : 0), v => `parked ${v.toFixed(1)} units from the cursor on average`))));
+    grant('MVP (Most Valuable Puppet)', best(onlyActive(named(s => ratio(s.agree, s.disagree), v => `agreed with the mob ${Math.round(v * 100)}% of the time`))));
+    grant('Wiggle Champion', best(onlyActive(named(s => s.activitySum, v => `moved the most (${v.toFixed(1)} pad-lengths)`))));
   }
-  const clickers = named(s => s.clicks, v => `${v} click votes`);
-  const goblin = best(clickers);
-  if (goblin.v > 0) grant('Click Goblin', goblin);
   grant(
     'Moral Support',
     best(named(s => s.samples - s.activeSamples, v => `was there in spirit (idle) for ${v}s`))
@@ -546,44 +682,25 @@ export const init = spacetimedb.init(ctx => {
     // Sending faster than the tick just overwrites itself before it is read.
     pointerHz: 15,
     pointerBudget: 400,
-    pointerHzEffective: 15,
     tickHz: 15,
     // omega ~6.3 rad/s, zeta ~0.95: covers half the distance in ~0.27 s.
     gain: 40,
     damping: 12,
     maxSpeed: 20,
     influenceCap: 0.25,
-    quorumMin: 1,
-    quorumFrac: 0.3,
-    quorumRadius: 1.2,
-    quorumWindowMs: 1500,
-    maxPlayers: 150,
+    maxPlayers: MAX_PLAYERS_CEILING,
+    maxRooms: MAX_ROOMS_CEILING,
     freshMs: 2000,
     dictatorSecs: 5,
     autoAdvance: true,
     paused: false,
   });
-  ctx.db.cursor.insert({
-    id: 0,
-    x: WORLD_W / 2,
-    y: WORLD_H / 2,
-    vx: 0,
-    vy: 0,
-    tx: WORLD_W / 2,
-    ty: WORLD_H / 2,
-    chaos: 0,
-    active: 0,
-    tick: 0n,
-    lastTickAt: ctx.timestamp,
-    dictator: '',
-    dictatorUntil: ctx.timestamp,
-  });
+  insertRoom(ctx, DEFAULT_ROOM_ID, DEFAULT_ROOM_CODE, 'The Lobby', ctx.sender);
 });
 
 export const onConnect = spacetimedb.clientConnected(ctx => {
   if (ctx.connectionId) ctx.db.session.insert({ connectionId: ctx.connectionId, identity: ctx.sender });
   refreshPresence(ctx, ctx.sender);
-  recomputePointerHz(ctx);
   syncTickSchedule(ctx);
 });
 
@@ -592,8 +709,7 @@ export const onDisconnect = spacetimedb.clientDisconnected(ctx => {
   const before = ctx.db.player.identity.find(ctx.sender);
   refreshPresence(ctx, ctx.sender);
   const after = ctx.db.player.identity.find(ctx.sender);
-  if (before?.connected && after && !after.connected) log(ctx, 'leave', hex(ctx.sender), { name: after.name });
-  recomputePointerHz(ctx);
+  if (before?.connected && after && !after.connected) log(ctx, after.roomId, 'leave', hex(ctx.sender), { name: after.name });
   syncTickSchedule(ctx);
 });
 
@@ -601,24 +717,38 @@ export const onDisconnect = spacetimedb.clientDisconnected(ctx => {
 // Player reducers
 // ---------------------------------------------------------------------------
 
-export const join = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) => {
+/**
+ * Join (or re-join) with a name. `code` picks a room: '' keeps the player's
+ * current room (the default lobby for newcomers).
+ */
+export const join = spacetimedb.reducer({ name: t.string(), code: t.string() }, (ctx, { name, code }) => {
   const ban = ctx.db.banned.identity.find(ctx.sender);
   if (ban && ban.until.microsSinceUnixEpoch > now(ctx)) throw new SenderError('you were kicked; try again soon');
   const existing = ctx.db.player.identity.find(ctx.sender);
   const clean = sanitizeName(name, ctx);
+  const want = normalizeRoomCode(code);
+  let roomId = existing?.roomId ?? DEFAULT_ROOM_ID;
+  if (want) {
+    const r = ctx.db.room.code.find(want);
+    if (!r) throw new SenderError(`no room with code ${want}`);
+    roomId = r.id;
+  } else if (!ctx.db.room.id.find(roomId)) roomId = DEFAULT_ROOM_ID; // their old room was garbage-collected
+  const cfg = getConfig(ctx);
+  const joiningRoom = !existing || !existing.connected || existing.roomId !== roomId;
+  if (joiningRoom && roomPlayers(ctx, roomId) >= Math.min(cfg.maxPlayers, MAX_PLAYERS_CEILING)) throw new SenderError('room is full');
   if (existing) {
-    ctx.db.player.identity.update({ ...existing, name: clean, connected: true });
+    if (existing.roomId !== roomId) movePlayer(ctx, ctx.sender, roomId);
+    ctx.db.player.identity.update({ ...ctx.db.player.identity.find(ctx.sender)!, name: clean, connected: true });
   } else {
-    const cfg = getConfig(ctx);
-    if (connectedPlayerCount(ctx) >= cfg.maxPlayers) throw new SenderError('room is full');
     let n = 0;
     const teamCount = [0, 0];
-    for (const p of ctx.db.player.iter()) {
+    for (const p of ctx.db.player.roomId.filter(roomId)) {
       n++;
       if (p.connected) teamCount[p.team]++;
     }
     ctx.db.player.insert({
       identity: ctx.sender,
+      roomId,
       name: clean,
       color: COLORS[n % COLORS.length],
       team: teamCount[0] <= teamCount[1] ? 0 : 1,
@@ -628,30 +758,46 @@ export const join = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) =>
     });
   }
   if (!ctx.db.pointer.identity.find(ctx.sender)) markIdle(ctx, ctx.sender, ctx.timestamp);
-  log(ctx, 'join', hex(ctx.sender), { name: clean });
-  recomputePointerHz(ctx);
+  log(ctx, roomId, 'join', hex(ctx.sender), { name: clean });
+  refreshRoom(ctx, roomId);
   syncTickSchedule(ctx);
+  ensureStarted(ctx, getRoom(ctx, roomId));
+});
+
+/** Any joined player can open a room; they become its host and move into it. */
+export const create_room = spacetimedb.reducer({ name: t.string() }, (ctx, { name }) => {
+  const p = ctx.db.player.identity.find(ctx.sender);
+  if (!p) throw new SenderError('join first');
+  const clean = name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 24) || `${p.name}'s room`; // eslint-disable-line no-control-regex
+  const room = createRoom(ctx, clean);
+  movePlayer(ctx, ctx.sender, room.id);
+  ctx.db.player.identity.update({ ...ctx.db.player.identity.find(ctx.sender)!, connected: true });
+  refreshRoom(ctx, room.id);
+  syncTickSchedule(ctx);
+  ensureStarted(ctx, getRoom(ctx, room.id));
 });
 
 export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx, { x, y }) => {
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new SenderError('bad coordinates');
   const p = ctx.db.player.identity.find(ctx.sender);
   if (!p) throw new SenderError('join first');
+  const room = ctx.db.room.id.find(p.roomId);
+  if (!room) throw new SenderError('room is gone; join again');
   if (!p.connected) {
     // Marked gone for idling, but this connection is alive: welcome back.
     if ([...ctx.db.session.identity.filter(ctx.sender)].length === 0) throw new SenderError('join first');
     ctx.db.player.identity.update({ ...p, connected: true });
-    log(ctx, 'join', hex(ctx.sender), { name: p.name, reason: 'back' });
-    recomputePointerHz(ctx);
+    log(ctx, p.roomId, 'join', hex(ctx.sender), { name: p.name, reason: 'back' });
+    refreshRoom(ctx, p.roomId);
     syncTickSchedule(ctx);
   }
   const cx = clamp(x, 0, 1);
   const cy = clamp(y, 0, 1);
-  // Safety-net rate limit (GCRA) at 2x the advertised rate with a burst of a few
-  // calls, so packets bunched by mobile Wi-Fi land instead of the newest being dropped.
-  // The real lever is the client throttle.
+  // Safety-net rate limit (GCRA) at 2x the room's advertised rate with a burst of a
+  // few calls, so packets bunched by mobile Wi-Fi land instead of the newest being
+  // dropped. The real lever is the client throttle.
   const tNow = now(ctx);
-  const intervalUs = BigInt(Math.floor(1e6 / (getConfig(ctx).pointerHzEffective * 2)));
+  const intervalUs = BigInt(Math.floor(1e6 / (Math.max(1, room.pointerHzEffective) * 2)));
   const rate = ctx.db.pointerRate.identity.find(ctx.sender);
   const tat = rate && rate.tatUs > tNow ? rate.tatUs : tNow;
   if (tat - tNow > POINTER_BURST * intervalUs) return;
@@ -660,84 +806,79 @@ export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx,
 
   const prev = ctx.db.pointer.identity.find(ctx.sender);
   if (!prev) {
-    ctx.db.pointer.insert({ identity: ctx.sender, x: cx, y: cy, activity: 0, updatedAt: ctx.timestamp });
+    ctx.db.pointer.insert({ identity: ctx.sender, roomId: p.roomId, x: cx, y: cy, activity: 0, updatedAt: ctx.timestamp });
     ctx.db.idle.identity.delete(ctx.sender);
     return;
   }
   const dtUs = tNow - prev.updatedAt.microsSinceUnixEpoch;
   const decay = Math.exp(-Number(dtUs) / 1.5e6);
   const activity = prev.activity * decay + Math.hypot(cx - prev.x, cy - prev.y);
-  ctx.db.pointer.identity.update({ ...prev, x: cx, y: cy, activity, updatedAt: ctx.timestamp });
+  ctx.db.pointer.identity.update({ ...prev, roomId: p.roomId, x: cx, y: cy, activity, updatedAt: ctx.timestamp });
 });
 
-export const click = spacetimedb.reducer(ctx => {
-  const p = ctx.db.player.identity.find(ctx.sender);
-  if (!p || !p.connected) throw new SenderError('join first');
-  const cfg = getConfig(ctx);
-  const cur = getCursor(ctx);
-  const prev = ctx.db.clickVote.identity.find(ctx.sender);
-  if (prev && now(ctx) - prev.at.microsSinceUnixEpoch < 250_000n) return;
-  const vote = { identity: ctx.sender, x: cur.x, y: cur.y, at: ctx.timestamp };
-  if (prev) ctx.db.clickVote.identity.update(vote);
-  else ctx.db.clickVote.insert(vote);
-  const st = ctx.db.playerStats.identity.find(ctx.sender);
-  if (st) ctx.db.playerStats.identity.update({ ...st, clicks: st.clicks + 1 });
-  fx(ctx, 'vote', cur.x, cur.y, hex(ctx.sender));
-
-  // Quorum: enough recent votes near the current cursor position.
-  const windowUs = BigInt(cfg.quorumWindowMs) * 1000n;
-  const near = [...ctx.db.clickVote.iter()].filter(
-    v =>
-      now(ctx) - v.at.microsSinceUnixEpoch <= windowUs &&
-      Math.hypot(v.x - cur.x, v.y - cur.y) <= cfg.quorumRadius
-  );
-  const need = Math.max(cfg.quorumMin, Math.ceil(cfg.quorumFrac * Math.max(1, cur.active)));
-  if (near.length < need) return;
-  for (const v of near) ctx.db.clickVote.identity.delete(v.identity);
-  registerClick(ctx, cur.x, cur.y, near.length);
-});
-
-function registerClick(ctx: Ctx, x: number, y: number, votes: number, auto = false) {
-  const l = currentLevel(ctx);
-  if (l && l.state === 'running' && nowMs(ctx) < playAtOf(l)) return; // still counting down
-  fx(ctx, auto ? 'autoclick' : 'click', x, y);
-  log(ctx, auto ? 'autoclick' : 'click', '', { x: +x.toFixed(2), y: +y.toFixed(2), votes });
-  if (!l || l.state !== 'running' || l.kind !== 'minesweeper') return;
+/**
+ * Mob Sweeper's only reveal: the server clicks the cell under the cursor when
+ * the random timer fires. Phones cannot click.
+ */
+function autoClick(ctx: Ctx, room: RoomRow, l: LevelRow, x: number, y: number) {
+  fx(ctx, room.id, 'autoclick', x, y);
+  log(ctx, room.id, 'autoclick', '', { x: +x.toFixed(2), y: +y.toFixed(2) });
   const params = JSON.parse(l.params) as MinesParams;
   const prog = JSON.parse(l.progress) as MinesProgress;
   const sec = ctx.db.levelSecret.levelId.find(l.id);
   if (!sec) return;
   const { c, r } = cellAt(params, x, y);
   const res = revealCell(params, prog, sec.data, c, r);
+  const next = { ...(res.result === 'noop' ? prog : res.prog), nextAutoAt: nowMs(ctx) + autoClickMs(params, () => ctx.random()) };
+  if (res.result !== 'noop') ctx.db.levelSecret.levelId.update({ ...sec, data: res.secret });
+  ctx.db.level.id.update({ ...l, progress: JSON.stringify(next) });
   if (res.result === 'noop') return;
-  ctx.db.levelSecret.levelId.update({ ...sec, data: res.secret });
-  ctx.db.level.id.update({ ...l, progress: JSON.stringify(res.prog) });
   if (res.result === 'mine' || res.result === 'lost') {
-    fx(ctx, 'mine', x, y);
-    log(ctx, 'mine', '', { c, r, lives: res.prog.lives });
-  } else fx(ctx, 'reveal', x, y);
-  if (res.result === 'won') endLevel(ctx, l.id, 'won');
-  if (res.result === 'lost') endLevel(ctx, l.id, 'lost');
+    fx(ctx, room.id, 'mine', x, y);
+    log(ctx, room.id, 'mine', '', { c, r, lives: res.prog.lives });
+  } else fx(ctx, room.id, 'reveal', x, y);
+  if (res.result === 'won') endLevel(ctx, room, l.id, 'won');
+  if (res.result === 'lost') endLevel(ctx, room, l.id, 'lost');
 }
 
 // ---------------------------------------------------------------------------
-// Tick (scheduled, private)
+// Tick (scheduled, private): one call advances every room that has players.
 // ---------------------------------------------------------------------------
 
 export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tickSchedule.rowType }, ctx => {
   const cfg = getConfig(ctx);
-  const cur = getCursor(ctx);
   const tNow = now(ctx);
-  const dt = clamp(Number(tNow - cur.lastTickAt.microsSinceUnixEpoch) / 1e6, 0, 0.2);
   const freshUs = BigInt(cfg.freshMs) * 1000n;
+  const intervalUs = MICROS / BigInt(Math.max(1, cfg.tickHz));
+  // The tick that crosses a wall-clock second does the 1 Hz housekeeping.
+  const secondTick = tNow / MICROS !== (tNow - intervalUs) / MICROS;
 
-  const pts: Pt[] = [];
+  // One pass over every pointer, grouped by room.
+  const byRoom = new Map<number, Pt[]>();
   for (const ptr of ctx.db.pointer.iter()) {
     if (tNow - ptr.updatedAt.microsSinceUnixEpoch > freshUs) continue;
     const pl = ctx.db.player.identity.find(ptr.identity);
-    if (!pl || !pl.connected) continue;
+    if (!pl || !pl.connected || pl.roomId !== ptr.roomId) continue;
+    let pts = byRoom.get(ptr.roomId);
+    if (!pts) byRoom.set(ptr.roomId, (pts = []));
     pts.push({ id: hex(ptr.identity), x: ptr.x * WORLD_W, y: ptr.y * WORLD_H, w: ptr.activity, team: pl.team });
   }
+
+  for (const room of [...ctx.db.room.iter()]) {
+    if (room.players === 0) continue;
+    tickRoom(ctx, cfg, room, byRoom.get(room.id) ?? [], tNow, secondTick);
+  }
+
+  if (secondTick) {
+    gcStalePointers(ctx, tNow);
+    sweepIdle(ctx, tNow);
+    gcRooms(ctx, tNow);
+  }
+});
+
+function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pts: Pt[], tNow: bigint, secondTick: boolean) {
+  const cur = getCursor(ctx, room.id);
+  const dt = clamp(Number(tNow - cur.lastTickAt.microsSinceUnixEpoch) / 1e6, 0, 0.2);
 
   // Rotating dictator: one random fresh player rules for a few seconds.
   let dictator = cur.dictator;
@@ -748,14 +889,14 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       const pick = pts[ctx.random.integerInRange(0, pts.length - 1)];
       dictator = pick.id;
       dictatorUntil = ts(tNow + BigInt(Math.round(cfg.dictatorSecs * 1e6)));
-      const pl = [...ctx.db.player.iter()].find(p => hex(p.identity) === pick.id);
-      log(ctx, 'dictator', pick.id, { name: pl?.name ?? '?' });
-      fx(ctx, 'dictator', pick.x, pick.y, pick.id);
+      const pl = [...ctx.db.player.roomId.filter(room.id)].find(p => hex(p.identity) === pick.id);
+      log(ctx, room.id, 'dictator', pick.id, { name: pl?.name ?? '?' });
+      fx(ctx, room.id, 'dictator', pick.x, pick.y, pick.id);
     }
   } else if (cfg.rule !== 'dictator') dictator = '';
 
   const target = aggregate(cfg.rule as Rule, pts, cfg.influenceCap, dictator);
-  const lvl = currentLevel(ctx);
+  const lvl = currentLevel(ctx, room);
   const running = lvl && lvl.state === 'running' ? lvl : undefined;
   const before = { x: cur.x, y: cur.y };
   const spring = cursorPhysics(running?.kind, cfg);
@@ -764,7 +905,8 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   const chaosSmoothed = cur.chaos + (ch - cur.chaos) * Math.min(1, dt * 3);
 
   // Countdown: hold the cursor on the start spot until play begins.
-  const countingDown = !!running && Number(tNow / 1000n) < playAtOf(running);
+  const tMs = Number(tNow / 1000n);
+  const countingDown = !!running && tMs < playAtOf(running);
   if (running && countingDown) {
     const s = startPos(running.kind, JSON.parse(running.params));
     body = { x: s.x, y: s.y, vx: 0, vy: 0 };
@@ -775,33 +917,33 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
     let progress = running.progress;
     let outcome: 'won' | 'lost' | null = null;
     const timeUp = tNow >= running.deadline.microsSinceUnixEpoch;
-    const tMs = Number(tNow / 1000n);
+    const tPlay = (tMs - playAtOf(running)) / 1000;
     const rand = () => ctx.random();
+    const emit = (kind: string, x: number, y: number, who = '') => fx(ctx, room.id, kind, x, y, who);
     if (running.kind === 'targets') {
       const p = JSON.parse(running.params) as TargetsParams;
       const prog = JSON.parse(progress) as TargetsProgress;
-      const tg = prog.next < p.targets.length ? targetPos(p, prog.next, (Number(tNow / 1000n) - playAtOf(running)) / 1000) : null;
+      const tg = prog.next < p.targets.length ? targetPos(p, prog.next, tPlay) : null;
       if (tg && Math.hypot(body.x - tg.x, body.y - tg.y) <= p.r) {
         prog.next += 1;
         progress = JSON.stringify(prog);
-        fx(ctx, 'target', tg.x, tg.y);
-        log(ctx, 'target', '', { n: prog.next, of: p.targets.length });
+        emit('target', tg.x, tg.y);
+        log(ctx, room.id, 'target', '', { n: prog.next, of: p.targets.length });
         if (prog.next >= p.targets.length) outcome = 'won';
       }
     } else if (running.kind === 'maze') {
       const m = JSON.parse(running.params) as MazeParams;
       const prog = JSON.parse(progress) as MazeProgress;
       const s = tileCenter(m, m.start.c, m.start.r);
-      const nowMs = Number(tNow / 1000n);
-      if (nowMs < prog.frozenUntil) {
+      if (tMs < prog.frozenUntil) {
         // Just respawned: hold at the start so the mob can regroup.
         body = { x: s.x, y: s.y, vx: 0, vy: 0 };
       } else if (mazeHit(m, before, body)) {
         prog.hits += 1;
-        prog.frozenUntil = nowMs + 700;
+        prog.frozenUntil = tMs + 700;
         progress = JSON.stringify(prog);
-        fx(ctx, 'wall', body.x, body.y);
-        log(ctx, 'wall', '', { hits: prog.hits });
+        emit('wall', body.x, body.y);
+        log(ctx, room.id, 'wall', '', { hits: prog.hits });
         body = { x: s.x, y: s.y, vx: 0, vy: 0 };
       } else {
         const tl = tileAt(m, body.x, body.y);
@@ -811,13 +953,12 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       const p = JSON.parse(running.params) as RedlightParams;
       const prog = JSON.parse(progress) as RedlightProgress;
       const r = redlightStep(p, prog, body, tMs, rand);
-      body = r.body;
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       for (const e of r.events) {
         if (e === 'fault') {
-          fx(ctx, 'fault', before.x, before.y);
-          log(ctx, 'fault', '', { faults: r.prog.faults, of: p.faultCap });
-        } else fx(ctx, 'light', WORLD_W / 2, 0.9, e);
+          emit('fault', body.x, body.y);
+          log(ctx, room.id, 'fault', '', { faults: r.prog.faults, of: p.faultCap, rewind: p.rewind });
+        } else emit('light', WORLD_W / 2, 0.9, e);
       }
       if (r.won) outcome = 'won';
       else if (r.prog.faults >= p.faultCap) outcome = 'lost';
@@ -827,11 +968,11 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       const r = balloonStep(p, prog, tMs, body, rand);
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       for (const e of r.events) {
-        fx(ctx, e.kind, e.x, e.y);
-        if (e.kind === 'drop') log(ctx, 'drop', '', { drops: r.prog.drops, of: p.dropCap });
+        emit(e.kind, e.x, e.y);
+        if (e.kind === 'drop') log(ctx, room.id, 'drop', '', { drops: r.prog.drops, of: p.dropCap });
       }
       if (r.prog.drops >= p.dropCap) outcome = 'lost';
-      else if (timeUp) outcome = 'won'; // survived the stage timer
+      else if (r.prog.saves >= p.saveTarget) outcome = 'won';
     } else if (running.kind === 'mole') {
       const p = JSON.parse(running.params) as MoleParams;
       const prog = JSON.parse(progress) as MoleProgress;
@@ -839,19 +980,21 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       if (r.event === 'hit' || r.event === 'miss') {
         const h = p.holes[prog.up];
-        fx(ctx, r.event === 'hit' ? 'mole_hit' : 'mole_miss', h.x, h.y);
-        log(ctx, r.event === 'hit' ? 'mole_hit' : 'mole_miss', '', { score: r.prog.score, of: p.target, misses: r.prog.misses });
+        emit(r.event === 'hit' ? 'mole_hit' : 'mole_miss', h.x, h.y);
+        log(ctx, room.id, r.event === 'hit' ? 'mole_hit' : 'mole_miss', '', { score: r.prog.score, of: p.target, misses: r.prog.misses });
       }
       if (r.prog.score >= p.target) outcome = 'won';
       else if (r.prog.misses >= p.missCap) outcome = 'lost';
     } else if (running.kind === 'potato') {
       const p = JSON.parse(running.params) as PotatoParams;
       const prog = JSON.parse(progress) as PotatoProgress;
-      if (tMs >= prog.fuseAt) {
-        const inside = potatoInBucket(p, (tMs - playAtOf(running)) / 1000, body.x, body.y);
-        fx(ctx, inside ? 'splash' : 'boom', body.x, body.y);
-        log(ctx, 'potato', '', { inside });
-        outcome = inside ? 'won' : 'lost';
+      const r = potatoStep(p, prog, tMs, tPlay, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        emit(r.event === 'boom' ? 'boom' : 'splash', body.x, body.y);
+        log(ctx, room.id, 'potato', '', { event: r.event, round: r.prog.round, of: p.rounds });
+        if (r.event === 'won') outcome = 'won';
+        else if (r.event === 'boom') outcome = 'lost';
       }
     } else if (running.kind === 'chairs') {
       const p = JSON.parse(running.params) as ChairsParams;
@@ -860,8 +1003,8 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       if (r.event) {
         const sat = r.prog.sat >= 0 ? p.chairs[r.prog.sat] : null;
-        fx(ctx, r.event === 'lost' ? 'no_chair' : 'sit', sat ? sat.x + sat.w / 2 : body.x, sat ? sat.y + sat.h / 2 : body.y);
-        log(ctx, 'chairs', '', { event: r.event, round: prog.round, left: r.prog.left.length });
+        emit(r.event === 'lost' ? 'no_chair' : 'sit', sat ? sat.x + sat.w / 2 : body.x, sat ? sat.y + sat.h / 2 : body.y);
+        log(ctx, room.id, 'chairs', '', { event: r.event, round: prog.round, left: r.prog.left.length });
         if (r.event === 'won') outcome = 'won';
         else if (r.event === 'lost') outcome = 'lost';
       }
@@ -871,30 +1014,71 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
       const r = keyboardStep(p, prog, tMs, body);
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       if (r.event) {
-        fx(ctx, r.event === 'key' ? 'key' : 'buzz', body.x, body.y, r.event === 'key' ? p.word[prog.next] : r.prog.onKey);
-        log(ctx, r.event, '', { typed: p.word.slice(0, r.prog.next), word: p.word });
+        emit(r.event === 'key' ? 'key' : 'buzz', body.x, body.y, r.event === 'key' ? prog.onKey || r.prog.onKey : r.prog.onKey);
+        log(ctx, room.id, r.event, '', { typed: p.word.slice(0, r.prog.next), word: p.word });
+      }
+      if (r.won) outcome = 'won';
+    } else if (running.kind === 'hunt') {
+      const p = JSON.parse(running.params) as HuntParams;
+      const prog = JSON.parse(progress) as HuntProgress;
+      const sec = ctx.db.levelSecret.levelId.find(running.id);
+      if (sec) {
+        const secret = JSON.parse(sec.data) as HuntSecret;
+        const r = huntStep(p, prog, secret, tMs, body, rand);
+        if (r.prog !== prog) progress = JSON.stringify(r.prog);
+        if (r.secret !== secret) ctx.db.levelSecret.levelId.update({ ...sec, data: JSON.stringify(r.secret) });
+        if (r.event === 'found') {
+          emit('hunt_found', body.x, body.y);
+          log(ctx, room.id, 'hunt_found', '', { found: r.prog.found.length, of: p.finds });
+        } else if (r.event === 'reset') emit('hunt_reset', body.x, body.y);
+        if (r.won) outcome = 'won';
+      }
+    } else if (running.kind === 'valves') {
+      const p = JSON.parse(running.params) as ValvesParams;
+      const prog = JSON.parse(progress) as ValvesProgress;
+      const r = valvesStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const v = r.event.i >= 0 ? p.valves[r.event.i] : body;
+        emit(`valve_${r.event.kind}`, v.x, v.y);
+        if (r.event.kind === 'blow') log(ctx, room.id, 'valve_blow', '', { blowouts: r.prog.blowouts, of: p.blowCap });
+      }
+      if (r.prog.blowouts >= p.blowCap) outcome = 'lost';
+      else if (r.won) outcome = 'won';
+    } else if (running.kind === 'stations') {
+      const p = JSON.parse(running.params) as StationsParams;
+      const prog = JSON.parse(progress) as StationsProgress;
+      const r = stationsStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const st = p.stations[prog.next];
+        emit(r.event === 'visit' ? 'station' : 'station_cancel', st.x, st.y);
+        log(ctx, room.id, r.event === 'visit' ? 'station' : 'station_cancel', '', { next: r.prog.next, of: p.stations.length });
       }
       if (r.won) outcome = 'won';
     }
     if (running.kind === 'vote') {
       if (timeUp) {
-        const s = resolveVote(ctx, running.id, body.x, body.y);
+        const s = resolveVote(ctx, room, running, body.x, body.y);
         if (s) body = { x: s.x, y: s.y, vx: 0, vy: 0 };
       }
     } else if (!outcome && timeUp) outcome = 'lost';
-    // The level row is broadcast to every phone, so only write it when progress
-    // changes or once a second (cooperation sample), never every tick.
-    const sampleNow = (cur.tick + 1n) % BigInt(cfg.tickHz) === 0n;
-    if (running.kind !== 'vote' && (progress !== running.progress || sampleNow || outcome)) {
+    // The level row is broadcast to every phone in the room, so only write it
+    // when progress changes or once a second (cooperation sample), never every tick.
+    if (running.kind !== 'vote' && (progress !== running.progress || secondTick || outcome)) {
       ctx.db.level.id.update({
         ...running,
         progress,
-        chaosSum: running.chaosSum + (sampleNow ? chaosSmoothed : 0),
-        ticks: running.ticks + (sampleNow ? 1 : 0),
+        chaosSum: running.chaosSum + (secondTick ? chaosSmoothed : 0),
+        ticks: running.ticks + (secondTick ? 1 : 0),
       });
     }
-    if (outcome) endLevel(ctx, running.id, outcome);
-    else if (running.kind === 'minesweeper') maybeAutoClick(ctx, running.id, body);
+    if (outcome) endLevel(ctx, room, running.id, outcome);
+    else if (running.kind === 'minesweeper') {
+      const l = ctx.db.level.id.find(running.id);
+      const prog = l ? (JSON.parse(l.progress) as MinesProgress) : null;
+      if (l && prog && prog.nextAutoAt !== undefined && tMs >= prog.nextAutoAt) autoClick(ctx, room, l, body.x, body.y);
+    }
   }
 
   const tickNo = cur.tick + 1n;
@@ -912,49 +1096,37 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   });
 
   // 5 Hz: compact ghost frame so phones can draw everyone without the pointer table.
-  if (tickNo % 3n === 0n) writeGhostFrame(ctx, pts, dictator);
+  if (tickNo % 3n === 0n) writeGhostFrame(ctx, room.id, pts, dictator);
 
   // 1 Hz: behaviour stats for awards + a replay/heatmap sample.
-  if (tickNo % BigInt(cfg.tickHz) === 0n) {
-    sampleStats(ctx, pts, body, target);
-    gcStalePointers(ctx, tNow);
-    sweepIdle(ctx, tNow);
-    log(ctx, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
+  if (secondTick) {
+    sampleStats(ctx, room.id, pts, body, target);
+    log(ctx, room.id, 'sample', '', { x: +body.x.toFixed(2), y: +body.y.toFixed(2), c: +chaosSmoothed.toFixed(2), n: pts.length });
   }
-});
-
-/** Minesweeper: at a random moment (2-30 s apart) the cursor clicks by itself. */
-function maybeAutoClick(ctx: Ctx, levelId: bigint, body: { x: number; y: number }) {
-  const l = ctx.db.level.id.find(levelId);
-  if (!l || l.state !== 'running') return;
-  const prog = JSON.parse(l.progress) as MinesProgress;
-  const t = nowMs(ctx);
-  if (prog.nextAutoAt === undefined || t < prog.nextAutoAt) return;
-  ctx.db.level.id.update({ ...l, progress: JSON.stringify({ ...prog, nextAutoAt: t + randMs(ctx) }) });
-  registerClick(ctx, body.x, body.y, 0, true);
 }
 
 /** ghost_frame.data: see packGhosts in sim.ts. */
-function writeGhostFrame(ctx: Ctx, pts: Pt[], dictator: string) {
+function writeGhostFrame(ctx: Ctx, roomId: number, pts: Pt[], dictator: string) {
   const colorById = new Map<string, number>();
-  for (const pl of ctx.db.player.iter()) if (pl.connected) colorById.set(hex(pl.identity), Math.max(0, COLORS.indexOf(pl.color)));
+  for (const pl of ctx.db.player.roomId.filter(roomId)) if (pl.connected) colorById.set(hex(pl.identity), Math.max(0, COLORS.indexOf(pl.color)));
   const data = packGhosts(
-    pts.map(p => ({
-      key: ghostKey(p.id),
-      color: colorById.get(p.id) ?? 0,
-      team: p.team,
-      dictator: p.id === dictator,
-      x: p.x / WORLD_W,
-      y: p.y / WORLD_H,
-    }))
+    pts
+      .map(p => ({
+        key: ghostKey(p.id),
+        color: colorById.get(p.id) ?? 0,
+        team: p.team,
+        dictator: p.id === dictator,
+        x: p.x / WORLD_W,
+        y: p.y / WORLD_H,
+      }))
       // Deterministic order, so an idle room produces identical bytes and no write.
       .sort((a, b) => a.key - b.key || a.color - b.color)
   );
-  const prev = ctx.db.ghostFrame.id.find(0);
+  const prev = ctx.db.ghostFrame.id.find(roomId);
   if (prev) {
     if (prev.data.length === data.length && prev.data.every((v, i) => v === data[i])) return; // idle room: no write
     ctx.db.ghostFrame.id.update({ ...prev, data });
-  } else ctx.db.ghostFrame.insert({ id: 0, data });
+  } else ctx.db.ghostFrame.insert({ id: roomId, data });
 }
 
 /**
@@ -971,25 +1143,25 @@ function gcStalePointers(ctx: Ctx, tNow: bigint) {
     }
 }
 
-function sampleStats(ctx: Ctx, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
+function sampleStats(ctx: Ctx, roomId: number, pts: Pt[], body: { x: number; y: number }, target: { x: number; y: number } | null) {
   const byId = new Map(pts.map(p => [p.id, p]));
   const tdx = target ? target.x - body.x : 0;
   const tdy = target ? target.y - body.y : 0;
   const tl = Math.hypot(tdx, tdy);
-  for (const pl of ctx.db.player.iter()) {
+  for (const pl of ctx.db.player.roomId.filter(roomId)) {
     if (!pl.connected) continue;
     const p = byId.get(hex(pl.identity));
     const st = ctx.db.playerStats.identity.find(pl.identity) ?? {
       identity: pl.identity,
+      roomId,
       samples: 0,
       activeSamples: 0,
       agree: 0,
       disagree: 0,
       distSum: 0,
       activitySum: 0,
-      clicks: 0,
     };
-    const next = { ...st, samples: st.samples + 1 };
+    const next = { ...st, roomId, samples: st.samples + 1 };
     if (p) {
       next.activeSamples += 1;
       const dx = p.x - body.x;
@@ -1012,10 +1184,12 @@ export const auto_advance = spacetimedb.reducer(
   { onSchedule: advanceSchedule },
   { arg: advanceSchedule.rowType },
   (ctx, { arg }) => {
-    const cur = currentLevel(ctx);
-    if (!cur || cur.id !== arg.afterLevelId || cur.state === 'running') return;
-    if (!getConfig(ctx).autoAdvance) return;
-    startNext(ctx);
+    const room = ctx.db.room.id.find(arg.roomId);
+    if (!room || !getConfig(ctx).autoAdvance) return;
+    const cur = currentLevel(ctx, room);
+    // afterLevelId 0 = a fresh room's first game; otherwise only advance past the level that scheduled us.
+    if (arg.afterLevelId === 0n ? cur !== null : !cur || cur.id !== arg.afterLevelId || cur.state === 'running') return;
+    startNext(ctx, room);
   }
 );
 
@@ -1039,7 +1213,7 @@ export const admin_claim = spacetimedb.reducer({ passphrase: t.string() }, (ctx,
   if (!isAdmin(ctx)) ctx.db.admin.insert({ identity: ctx.sender, grantedAt: ctx.timestamp });
 });
 
-/** Lets the admin UI know whether this identity is an admin (public read of a private table). */
+/** Lets the admin UI know whether this identity is a global admin (public read of a private table). */
 export const amIAdmin = spacetimedb.view({ public: true }, t.array(t.object('AdminFlag', { yes: t.bool() })), ctx =>
   ctx.db.admin.identity.find(ctx.sender) ? [{ yes: true }] : []
 );
@@ -1048,7 +1222,7 @@ export const admin_set_rule = spacetimedb.reducer({ rule: t.string() }, (ctx, { 
   requireAdmin(ctx);
   if (!RULES.includes(rule as Rule)) throw new SenderError(`unknown rule ${rule}`);
   ctx.db.config.id.update({ ...getConfig(ctx), rule });
-  log(ctx, 'rule', '', { rule });
+  for (const r of ctx.db.room.iter()) log(ctx, r.id, 'rule', '', { rule });
 });
 
 const NUMERIC_KEYS: Record<string, [number, number]> = {
@@ -1056,18 +1230,15 @@ const NUMERIC_KEYS: Record<string, [number, number]> = {
   pointerBudget: [10, 5000],
   tickHz: [5, 30],
   gain: [0.5, 40],
-  damping: [0, 30],
+  damping: [0, 60],
   maxSpeed: [0.5, 30],
   influenceCap: [0.01, 1],
-  quorumMin: [1, 200],
-  quorumFrac: [0, 1],
-  quorumRadius: [0.1, 10],
-  quorumWindowMs: [100, 10000],
-  maxPlayers: [1, 1000],
+  maxPlayers: [1, MAX_PLAYERS_CEILING],
+  maxRooms: [1, MAX_ROOMS_CEILING],
   freshMs: [250, 10000],
   dictatorSecs: [1, 60],
 };
-const INT_KEYS = new Set(['tickHz', 'quorumMin', 'quorumWindowMs', 'maxPlayers', 'freshMs']);
+const INT_KEYS = new Set(['tickHz', 'maxPlayers', 'maxRooms', 'freshMs']);
 
 export const admin_set_config = spacetimedb.reducer({ key: t.string(), value: t.f64() }, (ctx, { key, value }) => {
   requireAdmin(ctx);
@@ -1079,73 +1250,104 @@ export const admin_set_config = spacetimedb.reducer({ key: t.string(), value: t.
     if (!range || !Number.isFinite(value)) throw new SenderError(`bad config key ${key}`);
     let v = clamp(value, range[0], range[1]);
     if (INT_KEYS.has(key)) v = Math.round(v);
-    ctx.db.config.id.update({ ...c, [key]: v });
+    const next = { ...c, [key]: v };
+    // The spring must stay in the range the integrator resolves at this tick rate.
+    next.damping = clamp(next.damping, 0, dampingMax(next.tickHz));
+    next.gain = clamp(next.gain, 0.5, Math.min(NUMERIC_KEYS.gain[1], gainMax(next.tickHz)));
+    ctx.db.config.id.update(next);
   }
   if (key === 'tickHz' || key === 'paused') {
     // Re-arm the interval at the new rate.
     for (const r of [...ctx.db.tickSchedule.iter()]) ctx.db.tickSchedule.scheduledId.delete(r.scheduledId);
   }
-  recomputePointerHz(ctx);
+  if (key === 'pointerHz' || key === 'pointerBudget') for (const r of [...ctx.db.room.iter()]) refreshRoom(ctx, r.id);
   syncTickSchedule(ctx);
 });
 
-export const admin_start_level = spacetimedb.reducer({ kind: t.string() }, (ctx, { kind }) => {
+/** Per-mode stage-1 defaults. `json` is an object of numeric settings; unknown keys are dropped, values clamped. '{}' restores the shipped defaults. */
+export const admin_set_mode_settings = spacetimedb.reducer({ kind: t.string(), json: t.string() }, (ctx, { kind, json }) => {
   requireAdmin(ctx);
-  if (kind === 'next') return startNext(ctx);
-  if (kind === 'vote') return startVote(ctx);
-  if (!isPlayKind(kind)) throw new SenderError(`unknown level ${kind}`);
-  startLevel(ctx, kind, 1);
+  if (!isPlayKind(kind)) throw new SenderError(`unknown mode ${kind}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    throw new SenderError('settings must be a JSON object');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new SenderError('settings must be a JSON object');
+  const clean = JSON.stringify(sanitizeSettings(kind, raw as Record<string, unknown>));
+  const row = { kind, json: clean, updatedAt: ctx.timestamp };
+  if (ctx.db.modeSettings.kind.find(kind)) ctx.db.modeSettings.kind.update(row);
+  else ctx.db.modeSettings.insert(row);
+  log(ctx, DEFAULT_ROOM_ID, 'mode_settings', hex(ctx.sender), { kind, settings: JSON.parse(clean) });
 });
 
-export const admin_start_stage = spacetimedb.reducer({ kind: t.string(), stage: t.u32() }, (ctx, { kind, stage }) => {
-  requireAdmin(ctx);
+export const admin_start_level = spacetimedb.reducer({ roomId: t.u32(), kind: t.string() }, (ctx, { roomId, kind }) => {
+  const room = getRoom(ctx, roomId);
+  requireHost(ctx, room);
+  if (kind === 'next') return startNext(ctx, room);
+  if (kind === 'vote') return startVote(ctx, room);
+  if (!isPlayKind(kind)) throw new SenderError(`unknown level ${kind}`);
+  startLevel(ctx, room, kind, 1);
+});
+
+export const admin_start_stage = spacetimedb.reducer({ roomId: t.u32(), kind: t.string(), stage: t.u32() }, (ctx, { roomId, kind, stage }) => {
+  const room = getRoom(ctx, roomId);
+  requireHost(ctx, room);
   if (!isPlayKind(kind)) throw new SenderError(`unknown level ${kind}`);
   if (stage < 1 || stage > STAGES) throw new SenderError(`stage must be 1..${STAGES}`);
-  startLevel(ctx, kind, stage);
+  startLevel(ctx, room, kind, stage);
 });
 
-export const admin_stop_level = spacetimedb.reducer(ctx => {
-  requireAdmin(ctx);
-  const l = currentLevel(ctx);
-  if (l && l.state === 'running') endLevel(ctx, l.id, 'skipped');
-  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
+export const admin_stop_level = spacetimedb.reducer({ roomId: t.u32() }, (ctx, { roomId }) => {
+  const room = getRoom(ctx, roomId);
+  requireHost(ctx, room);
+  const l = currentLevel(ctx, room);
+  if (l && l.state === 'running') endLevel(ctx, room, l.id, 'skipped');
+  clearAdvance(ctx, roomId);
 });
 
 export const admin_kick = spacetimedb.reducer({ who: t.identity() }, (ctx, { who }) => {
-  requireAdmin(ctx);
   const p = ctx.db.player.identity.find(who);
+  if (!p) throw new SenderError('no such player');
+  requireHost(ctx, getRoom(ctx, p.roomId));
   ctx.db.player.identity.delete(who);
   ctx.db.pointer.identity.delete(who);
   ctx.db.pointerRate.identity.delete(who);
   ctx.db.idle.identity.delete(who);
-  ctx.db.clickVote.identity.delete(who);
   ctx.db.playerStats.identity.delete(who);
   const until = ts(now(ctx) + 120n * MICROS);
   if (ctx.db.banned.identity.find(who)) ctx.db.banned.identity.update({ identity: who, until });
   else ctx.db.banned.insert({ identity: who, until });
-  log(ctx, 'kick', hex(who), { name: p?.name ?? '?' });
-  recomputePointerHz(ctx);
+  log(ctx, p.roomId, 'kick', hex(who), { name: p.name });
+  refreshRoom(ctx, p.roomId);
   syncTickSchedule(ctx);
 });
 
-export const admin_reset_round = spacetimedb.reducer(ctx => {
-  requireAdmin(ctx);
-  const l = currentLevel(ctx);
-  if (l && l.state === 'running') endLevel(ctx, l.id, 'skipped');
-  for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
-  for (const p of [...ctx.db.player.iter()]) ctx.db.player.identity.update({ ...p, score: 0 });
-  for (const a of [...ctx.db.award.iter()]) ctx.db.award.id.delete(a.id);
-  for (const lv of [...ctx.db.level.iter()]) ctx.db.level.id.delete(lv.id);
-  for (const s of [...ctx.db.levelSecret.iter()]) ctx.db.levelSecret.levelId.delete(s.levelId);
-  resetStats(ctx);
-  resetCursorTo(ctx, WORLD_W / 2, WORLD_H / 2);
-  log(ctx, 'round_reset', '', {});
+export const admin_reset_round = spacetimedb.reducer({ roomId: t.u32() }, (ctx, { roomId }) => {
+  const room = getRoom(ctx, roomId);
+  requireHost(ctx, room);
+  const l = currentLevel(ctx, room);
+  if (l && l.state === 'running') endLevel(ctx, room, l.id, 'skipped');
+  clearAdvance(ctx, roomId);
+  for (const p of [...ctx.db.player.roomId.filter(roomId)]) ctx.db.player.identity.update({ ...p, score: 0 });
+  for (const a of [...ctx.db.award.roomId.filter(roomId)]) ctx.db.award.id.delete(a.id);
+  for (const lv of [...ctx.db.level.roomId.filter(roomId)]) {
+    ctx.db.levelSecret.levelId.delete(lv.id);
+    ctx.db.level.id.delete(lv.id);
+  }
+  resetStats(ctx, roomId);
+  ctx.db.room.id.update({ ...getRoom(ctx, roomId), levelId: 0n });
+  resetCursorTo(ctx, roomId, WORLD_W / 2, WORLD_H / 2);
+  log(ctx, roomId, 'round_reset', '', {});
+  ensureStarted(ctx, getRoom(ctx, roomId));
 });
 
 /** Written by the LLM commentator worker (which claims admin with the passphrase). */
-export const post_commentary = spacetimedb.reducer({ text: t.string() }, (ctx, { text }) => {
+export const post_commentary = spacetimedb.reducer({ roomId: t.u32(), text: t.string() }, (ctx, { roomId, text }) => {
   requireAdmin(ctx);
+  const room = getRoom(ctx, roomId);
   const clean = text.trim().slice(0, 280);
   if (!clean) return;
-  ctx.db.commentary.insert({ id: 0n, at: ctx.timestamp, levelId: currentLevel(ctx)?.id ?? 0n, text: clean });
+  ctx.db.commentary.insert({ id: 0n, roomId, at: ctx.timestamp, levelId: room.levelId, text: clean });
 });
