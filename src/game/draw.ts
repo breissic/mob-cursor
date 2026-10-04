@@ -1,17 +1,25 @@
 // Shared canvas art for every view (projector display + phone controller).
 // All functions draw in WORLD units (16 x 9); the caller sets the transform.
 import {
+  HUNT_BARS,
+  REDLIGHT_TOP,
   WORLD_H,
   WORLD_W,
   balloonsNow,
   bucketPos,
   clamp,
+  dollPos,
+  dollS,
   inRect,
   targetPos,
+  valveInZone,
+  valveLevelsNow,
   type BalloonParams,
   type BalloonProgress,
   type ChairsParams,
   type ChairsProgress,
+  type HuntParams,
+  type HuntProgress,
   type KeyboardParams,
   type KeyboardProgress,
   type MazeParams,
@@ -25,8 +33,12 @@ import {
   type Rect,
   type RedlightParams,
   type RedlightProgress,
+  type StationsParams,
+  type StationsProgress,
   type TargetsParams,
   type TargetsProgress,
+  type ValvesParams,
+  type ValvesProgress,
   type VoteParams,
   type VoteProgress,
   voteHover,
@@ -37,15 +49,18 @@ export const FONT_DISPLAY = "'Bungee', 'Impact', sans-serif";
 export const FONT_PIXEL = "'VT323', ui-monospace, monospace";
 
 export const GAME_META: Record<string, { exe: string; title: string; color: string; goal: string }> = {
-  targets: { exe: 'CLICKFEST.EXE', title: 'Clickfest', color: '#ff5a36', goal: 'Hit the numbered targets in order.' },
+  targets: { exe: 'CLICKFEST.EXE', title: 'Clickfest', color: '#ff5a36', goal: 'Hit every numbered target in order before the clock runs out.' },
   maze: { exe: 'MAZE.EXE', title: 'The Maze', color: '#2ec4b6', goal: 'Reach the trophy. Touch a wall = back to start.' },
-  minesweeper: { exe: 'MINES.EXE', title: 'Mob Sweeper', color: '#3a86ff', goal: 'Clear the board. Click together. The cursor also clicks by itself 💣' },
-  redlight: { exe: 'REDLIGHT.EXE', title: 'Red Light, Green Light', color: '#43b047', goal: 'Run on green. FREEZE on red or you go back to the start. Reach the finish line!' },
-  balloon: { exe: 'BALLOON.EXE', title: 'Keep It Up', color: '#4dabf7', goal: 'Get under the balloon to bop it up. Three drops and you are out. Survive the clock!' },
+  minesweeper: { exe: 'MINES.EXE', title: 'Mob Sweeper', color: '#3a86ff', goal: 'Nobody clicks. The cursor clicks BY ITSELF on a random fuse: park it on a safe cell before it fires 💣' },
+  redlight: { exe: 'REDLIGHT.EXE', title: 'Red Light, Green Light', color: '#43b047', goal: 'Walk the doll to the end: she only moves on GREEN with the cursor close to her. Move on RED and she gets dragged back.' },
+  balloon: { exe: 'BALLOON.EXE', title: 'Keep It Up', color: '#4dabf7', goal: 'Get under the balloon to bop it up. Rack up the saves; too many drops and you are out.' },
   mole: { exe: 'WHACK.EXE', title: 'Whack-a-Mole', color: '#8b5a2b', goal: 'Be ON the mole when it ducks back down. Too many misses = game over.' },
-  potato: { exe: 'POTATO.EXE', title: 'Hot Potato', color: '#f08c00', goal: 'The cursor is a hot potato. Be inside the bucket when the fuse hits zero!' },
+  potato: { exe: 'POTATO.EXE', title: 'Hot Potato', color: '#f08c00', goal: 'The cursor is a hot potato. Deliver it bucket after bucket before each fuse hits zero!' },
   chairs: { exe: 'CHAIRS.EXE', title: 'Musical Chairs', color: '#da77f2', goal: 'When the music stops, be on a chair. A chair goes each round. Sit on the last one!' },
-  keyboard: { exe: 'KEYBOARD.EXE', title: 'Giant Keyboard', color: '#5c7cfa', goal: 'Spell the word: hold the cursor on each letter in order. Wrong key = BZZT.' },
+  keyboard: { exe: 'KEYBOARD.EXE', title: 'Giant Keyboard', color: '#5c7cfa', goal: 'Type the phrase: hold the cursor on each letter in order. Wrong key = BZZT.' },
+  hunt: { exe: 'HUNT.EXE', title: 'Warmer, Colder', color: '#e8590c', goal: 'Something is hidden. The meter only says warmer or colder. Find it and HOLD STILL on it.' },
+  valves: { exe: 'VALVES.EXE', title: 'Pressure Room', color: '#0ca678', goal: 'Every gauge must sit in the green at once. Holding a valve fills it; the others leak. Keep them all green for the hold.' },
+  stations: { exe: 'STATIONS.EXE', title: 'Grand Tour', color: '#7048e8', goal: 'Visit the numbered stops in order and wait at each one. Leave early and that stop is cancelled.' },
   vote: { exe: 'PICK.EXE', title: 'Pick the next game', color: '#ff4fa3', goal: 'Park the cursor INSIDE a card. It is EXTRA strong right now. Time out = that game!' },
   lobby: { exe: 'LOBBY.EXE', title: 'Lobby', color: '#ffd23f', goal: 'Scan the QR code to join.' },
 };
@@ -99,6 +114,9 @@ const FIELD_COLOR: Record<string, string> = {
   potato: '#f6e7c1',
   chairs: '#2b1a4a',
   keyboard: '#d9d4c7',
+  hunt: '#1d2a1f',
+  valves: '#2f3640',
+  stations: '#e9ecef',
 };
 
 /** Color behind the playfield (also fills the letterbox bars). */
@@ -151,22 +169,50 @@ export function drawField(g: CanvasRenderingContext2D, kind: string, px: number)
     g.fillStyle = '#9e9e9e';
     g.fillRect(0, 0, WORLD_W, WORLD_H);
   } else if (kind === 'redlight') {
-    // Grass verges, asphalt track with lane lines.
+    // Grass verge under the light, asphalt yard where the doll walks (her path is drawn by the level).
     g.fillStyle = '#3b7a3b';
     g.fillRect(0, 0, WORLD_W, WORLD_H);
     g.fillStyle = '#4a4a52';
-    g.fillRect(0, 1.7, WORLD_W, WORLD_H - 1.7);
-    g.save();
-    g.strokeStyle = 'rgba(255,255,255,0.35)';
-    g.lineWidth = 4 * px;
-    g.setLineDash([0.6, 0.4]);
+    g.fillRect(0, REDLIGHT_TOP, WORLD_W, WORLD_H - REDLIGHT_TOP);
+    g.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let i = 0; i < 70; i++) g.fillRect((i * 5.13) % WORLD_W, REDLIGHT_TOP + ((i * 2.71) % (WORLD_H - REDLIGHT_TOP)), 0.25, 0.08);
+  } else if (kind === 'hunt') {
+    // Dark lawn with a faint grid: the only clue is the meter.
+    g.fillStyle = '#1d2a1f';
+    g.fillRect(0, 0, WORLD_W, WORLD_H);
+    g.strokeStyle = 'rgba(255,255,255,0.07)';
+    g.lineWidth = 2 * px;
     g.beginPath();
-    for (const y of [3.3, 4.5, 5.7, 6.9]) {
+    for (let x = 1; x < WORLD_W; x++) {
+      g.moveTo(x, 0);
+      g.lineTo(x, WORLD_H);
+    }
+    for (let y = 1; y < WORLD_H; y++) {
       g.moveTo(0, y);
       g.lineTo(WORLD_W, y);
     }
     g.stroke();
-    g.restore();
+  } else if (kind === 'valves') {
+    // Riveted steel plates.
+    checker(g, '#2f3640', '#353b48', 2);
+    g.fillStyle = 'rgba(255,255,255,0.12)';
+    for (let y = 0.3; y < WORLD_H; y += 2) for (let x = 0.3; x < WORLD_W; x += 2) g.fillRect(x, y, 0.12, 0.12);
+  } else if (kind === 'stations') {
+    // Map paper with a soft grid.
+    g.fillStyle = '#e9ecef';
+    g.fillRect(0, 0, WORLD_W, WORLD_H);
+    g.strokeStyle = 'rgba(0,0,0,0.07)';
+    g.lineWidth = 2 * px;
+    g.beginPath();
+    for (let x = 0.5; x < WORLD_W; x += 1) {
+      g.moveTo(x, 0);
+      g.lineTo(x, WORLD_H);
+    }
+    for (let y = 0.5; y < WORLD_H; y += 1) {
+      g.moveTo(0, y);
+      g.lineTo(WORLD_W, y);
+    }
+    g.stroke();
   } else if (kind === 'balloon') {
     g.fillStyle = '#8fd3ff';
     g.fillRect(0, 0, WORLD_W, WORLD_H);
@@ -221,13 +267,37 @@ export function drawLevel(
   if (lv.kind === 'targets') drawTargets(g, lv.params as TargetsParams, lv.progress as TargetsProgress, px, Math.max(0, t), serverMs, detail);
   else if (lv.kind === 'maze') drawMaze(g, lv.params as MazeParams, lv.progress as MazeProgress, px, serverMs);
   else if (lv.kind === 'vote') drawVote(g, lv.params as VoteParams, lv.progress as VoteProgress, px, serverMs, cursor, detail);
-  else if (lv.kind === 'minesweeper') drawMines(g, lv.params as MinesParams, lv.progress as MinesProgress, px, cursor, detail);
-  else if (lv.kind === 'redlight') drawRedlight(g, lv.params as RedlightParams, lv.progress as RedlightProgress, px, serverMs, detail);
+  else if (lv.kind === 'minesweeper') drawMines(g, lv.params as MinesParams, lv.progress as MinesProgress, px, serverMs, lv.playAt, cursor, detail);
+  else if (lv.kind === 'redlight') drawRedlight(g, lv.params as RedlightParams, lv.progress as RedlightProgress, px, serverMs, cursor, detail);
   else if (lv.kind === 'balloon') drawBalloon(g, lv.params as BalloonParams, lv.progress as BalloonProgress, px, serverMs, cursor, detail);
   else if (lv.kind === 'mole') drawMole(g, lv.params as MoleParams, lv.progress as MoleProgress, px, serverMs, cursor, detail);
   else if (lv.kind === 'potato') drawPotato(g, lv.params as PotatoParams, lv.progress as PotatoProgress, px, serverMs, Math.max(0, t), cursor, detail);
   else if (lv.kind === 'chairs') drawChairs(g, lv.params as ChairsParams, lv.progress as ChairsProgress, px, serverMs, cursor, detail);
   else if (lv.kind === 'keyboard') drawKeyboard(g, lv.params as KeyboardParams, lv.progress as KeyboardProgress, px, serverMs, detail);
+  else if (lv.kind === 'hunt') drawHunt(g, lv.params as HuntParams, lv.progress as HuntProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'valves') drawValves(g, lv.params as ValvesParams, lv.progress as ValvesProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'stations') drawStations(g, lv.params as StationsParams, lv.progress as StationsProgress, px, serverMs, cursor, detail);
+}
+
+/** Horizontal countdown bar: `frac` 1 = full. */
+function timeBar(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, frac: number, color: string, px: number) {
+  g.fillStyle = '#111';
+  g.fillRect(x, y, w, h);
+  g.fillStyle = color;
+  g.fillRect(x + 2 * px, y + 2 * px, Math.max(0, (w - 4 * px) * clamp(frac, 0, 1)), h - 4 * px);
+}
+
+/** Dwell progress ring around a point (hunt, stations, valves hold). */
+function dwellRing(g: CanvasRenderingContext2D, x: number, y: number, r: number, frac: number, color: string, px: number) {
+  g.lineWidth = 7 * px;
+  g.strokeStyle = 'rgba(0,0,0,0.45)';
+  g.beginPath();
+  g.arc(x, y, r, 0, Math.PI * 2);
+  g.stroke();
+  g.strokeStyle = color;
+  g.beginPath();
+  g.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(frac, 0, 1));
+  g.stroke();
 }
 
 function bullseye(g: CanvasRenderingContext2D, x: number, y: number, r: number, px: number, a = 1) {
@@ -654,6 +724,12 @@ function cardIcon(g: CanvasRenderingContext2D, kind: string, cx: number, cy: num
       ['M', 'O', 'B'].forEach((ch, i) => keycap(g, { x: cx - kw * 1.5 - 0.1 + i * (kw + 0.1), y: cy - kh / 2, w: kw, h: kh }, ch, '#f3ead7', px));
       return;
     }
+    case 'hunt':
+      return heatMeter(g, cx, cy, s * 1.6, s * 0.5, Math.floor(ms / 250) % (HUNT_BARS + 1), px);
+    case 'valves':
+      return gauge(g, cx, cy, s * 0.5, s * 1.4, 0.35 + 0.3 * (0.5 + 0.5 * Math.sin(ms / 400)), [0.35, 0.65], px);
+    case 'stations':
+      return stationShape(g, cx, cy, s * 0.7, '3', '#7048e8', px, true);
   }
 }
 
@@ -719,27 +795,144 @@ function drawVote(g: CanvasRenderingContext2D, p: VoteParams, prog: VoteProgress
 // Red Light, Green Light
 // ---------------------------------------------------------------------------
 
-function drawRedlight(g: CanvasRenderingContext2D, p: RedlightParams, prog: RedlightProgress, px: number, ms: number, detail: boolean) {
+/** The doll: a little figure; `walking` swings her arms, `frozen` (red) gives her watching eyes. */
+function dollShape(g: CanvasRenderingContext2D, x: number, y: number, walking: boolean, frozen: boolean, px: number, ms: number) {
+  const s = 0.42;
+  const swing = walking ? Math.sin(ms / 110) * 0.35 : 0;
+  g.fillStyle = 'rgba(0,0,0,0.3)';
+  g.beginPath();
+  g.ellipse(x, y + s * 1.05, s * 0.7, s * 0.22, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = frozen ? '#9fd3ff' : '#ff8fab';
+  g.beginPath();
+  g.moveTo(x, y - s * 0.3);
+  g.lineTo(x + s * 0.65, y + s * 0.95);
+  g.lineTo(x - s * 0.65, y + s * 0.95);
+  g.closePath();
+  g.fill();
+  g.lineWidth = 3 * px;
+  g.strokeStyle = '#111';
+  g.stroke();
+  g.beginPath();
+  g.moveTo(x - s * 0.1, y);
+  g.lineTo(x - s * 0.75, y + s * (0.35 + swing));
+  g.moveTo(x + s * 0.1, y);
+  g.lineTo(x + s * 0.75, y + s * (0.35 - swing));
+  g.stroke();
+  g.fillStyle = '#ffe0bd';
+  g.beginPath();
+  g.arc(x, y - s * 0.7, s * 0.42, 0, Math.PI * 2);
+  g.fill();
+  g.stroke();
+  g.fillStyle = '#4a2a10';
+  g.beginPath();
+  g.arc(x - s * 0.5, y - s * 0.8, s * 0.16, 0, Math.PI * 2);
+  g.arc(x + s * 0.5, y - s * 0.8, s * 0.16, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#111';
+  if (frozen) {
+    g.beginPath();
+    g.arc(x - s * 0.15, y - s * 0.72, s * 0.08, 0, Math.PI * 2);
+    g.arc(x + s * 0.15, y - s * 0.72, s * 0.08, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#ff3b3b';
+    g.lineWidth = 2 * px;
+    g.beginPath();
+    g.arc(x - s * 0.15, y - s * 0.72, s * 0.14, 0, Math.PI * 2);
+    g.arc(x + s * 0.15, y - s * 0.72, s * 0.14, 0, Math.PI * 2);
+    g.stroke();
+  } else {
+    g.fillRect(x - s * 0.2, y - s * 0.74, s * 0.1, s * 0.06);
+    g.fillRect(x + s * 0.1, y - s * 0.74, s * 0.1, s * 0.06);
+  }
+}
+
+function drawRedlight(g: CanvasRenderingContext2D, p: RedlightParams, prog: RedlightProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
   const red = prog.light === 'red';
   if (red) {
     g.fillStyle = `rgba(255,59,59,${0.12 + 0.06 * Math.sin(ms / 120)})`;
-    g.fillRect(0, 1.7, WORLD_W, WORLD_H - 1.7);
+    g.fillRect(0, REDLIGHT_TOP, WORLD_W, WORLD_H - REDLIGHT_TOP);
   }
-  // Start pad and checkered finish.
+  // The path: a pale lane with a dashed centre line; the part the doll has walked is lit green.
+  const s = dollS(p, prog, ms);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.strokeStyle = 'rgba(255,255,255,0.14)';
+  g.lineWidth = 0.9;
+  g.beginPath();
+  p.path.forEach((q, i) => (i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y)));
+  g.stroke();
+  g.strokeStyle = 'rgba(67,224,90,0.35)';
+  g.beginPath();
+  let acc = 0;
+  for (let i = 0; i < p.path.length; i++) {
+    const q = p.path[i];
+    if (i === 0) {
+      g.moveTo(q.x, q.y);
+      continue;
+    }
+    const a = p.path[i - 1];
+    const seg = Math.hypot(q.x - a.x, q.y - a.y);
+    if (acc + seg <= s) g.lineTo(q.x, q.y);
+    else {
+      const f = seg > 0 ? Math.max(0, (s - acc) / seg) : 0;
+      g.lineTo(a.x + (q.x - a.x) * f, a.y + (q.y - a.y) * f);
+      break;
+    }
+    acc += seg;
+  }
+  g.stroke();
+  g.save();
+  g.strokeStyle = 'rgba(255,255,255,0.4)';
+  g.lineWidth = 3 * px;
+  g.setLineDash([0.3, 0.3]);
+  g.beginPath();
+  p.path.forEach((q, i) => (i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y)));
+  g.stroke();
+  g.restore();
+  g.lineCap = 'butt';
+  // Start pad and the finish.
+  const start = p.path[0];
+  const end = p.path[p.path.length - 1];
   g.save();
   g.strokeStyle = '#ffd23f';
   g.lineWidth = 4 * px;
   g.setLineDash([0.12, 0.08]);
-  g.strokeRect(p.start.x - 0.6, p.start.y - 0.9, 1.2, 1.8);
+  g.strokeRect(start.x - 0.6, start.y - 0.6, 1.2, 1.2);
   g.restore();
-  const fx0 = p.finishX;
-  const sq = 0.3;
-  for (let r = 0; (1.7 + r * sq) < WORLD_H; r++)
-    for (let c = 0; c < 2; c++) {
+  const sq = 0.25;
+  for (let r = 0; r < 4; r++)
+    for (let c = 0; c < 4; c++) {
       g.fillStyle = (r + c) % 2 ? '#111' : '#fff';
-      g.fillRect(fx0 + c * sq, 1.7 + r * sq, sq, Math.min(sq, WORLD_H - 1.7 - r * sq));
+      g.fillRect(end.x - 0.5 + c * sq, end.y - 0.5 + r * sq, sq, sq);
     }
-  blit(g, 'flag', fx0 + 0.75, 1.9 + Math.abs(Math.sin(ms / 300)) * 0.1, 0.06, { shadow: 0.05 });
+  blit(g, 'flag', end.x + 0.55, end.y - 0.9 + Math.abs(Math.sin(ms / 300)) * 0.1, 0.05, { shadow: 0.05 });
+  // Doll + leash: she walks while the cursor is inside this ring (and the light is green).
+  const d = dollPos(p, prog, ms);
+  const near = Math.hypot(cursor.x - d.x, cursor.y - d.y) <= p.leash;
+  g.save();
+  g.setLineDash([0.16, 0.12]);
+  g.lineDashOffset = -ms / 400;
+  g.lineWidth = (near ? 6 : 4) * px;
+  g.strokeStyle = red ? 'rgba(255,59,59,0.7)' : near ? '#43e05a' : 'rgba(255,255,255,0.6)';
+  g.beginPath();
+  g.arc(d.x, d.y, p.leash, 0, Math.PI * 2);
+  g.stroke();
+  g.restore();
+  // Where a fault would send her.
+  if (red && detail) {
+    const back = dollPos(p, { ...prog, s: Math.max(0, s - p.rewind), walking: false }, ms);
+    g.save();
+    g.setLineDash([0.08, 0.1]);
+    g.strokeStyle = 'rgba(255,59,59,0.8)';
+    g.lineWidth = 3 * px;
+    g.beginPath();
+    g.arc(back.x, back.y, 0.3, 0, Math.PI * 2);
+    g.stroke();
+    g.restore();
+  }
+  dollShape(g, d.x, d.y, prog.walking && !red, red, px, ms);
+  if (!red && !near && detail) sticker(g, d.x, d.y - 1.1, 'COME CLOSER!', 0.3, '#ffd23f', '#111', px);
   // Dead-band ring around the anchor while red.
   if (red && prog.anchor) {
     g.save();
@@ -751,12 +944,20 @@ function drawRedlight(g: CanvasRenderingContext2D, p: RedlightParams, prog: Redl
     g.stroke();
     g.restore();
   }
-  // The light itself and the shout.
-  trafficLight(g, WORLD_W / 2, 0.88, 0.42, prog.light, px, ms);
-  headline(g, red ? 'FREEZE!' : 'GO GO GO!', 3.4, 0.9, 0.7, red ? '#ff3b3b' : '#43e05a', px);
+  // The light, the shout and the light timer. On red the bar is exact (time to
+  // green); on green it drains against the longest possible green so a fake-out
+  // never shows up on it.
+  trafficLight(g, WORLD_W / 2, 0.75, 0.38, prog.light, px, ms);
+  headline(g, red ? 'FREEZE!' : 'GO GO GO!', 3.2, 0.75, 0.7, red ? '#ff3b3b' : '#43e05a', px);
+  const barW = 3.6;
+  const frac = red ? clamp((prog.flipAt - ms) / Math.max(1, prog.flipAt - prog.litAt), 0, 1) : clamp(1 - (ms - prog.litAt) / (p.greenMaxS * 1000), 0, 1);
+  timeBar(g, WORLD_W / 2 - barW / 2, 1.3, barW, 0.22, frac, red ? '#ff3b3b' : '#43e05a', px);
+  // How far the doll has walked.
+  const prog01 = p.length > 0 ? s / p.length : 0;
+  timeBar(g, 0.4, REDLIGHT_TOP - 0.3, 2.6, 0.2, prog01, '#ffd23f', px);
   if (detail) {
-    const txt = `FAULTS ${prog.faults}/${p.faultCap}`;
-    sticker(g, WORLD_W - 2.4, 0.9, txt, 0.4, prog.faults >= p.faultCap - 1 ? '#ff3b3b' : '#ffffff', '#111', px);
+    worldText(g, `${Math.round(prog01 * 100)}% WALKED`, 3.15, REDLIGHT_TOP - 0.13, 0.26, { fill: '#fff', stroke: '#111', strokeW: 0.07, baseline: 'middle' });
+    sticker(g, WORLD_W - 2.2, 0.75, `FAULTS ${prog.faults}/${p.faultCap}`, 0.38, prog.faults >= p.faultCap - 1 ? '#ff3b3b' : '#ffffff', '#111', px);
   }
 }
 
@@ -848,16 +1049,25 @@ function drawMole(g: CanvasRenderingContext2D, p: MoleParams, prog: MoleProgress
 // ---------------------------------------------------------------------------
 
 function drawPotato(g: CanvasRenderingContext2D, p: PotatoParams, prog: PotatoProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
-  const b = bucketPos(p, t);
+  const round = Math.min(prog.round, p.rounds - 1);
+  // Delivered buckets stay as faint stamps.
+  for (let i = 0; i < round; i++) {
+    const q = p.buckets[i];
+    g.globalAlpha = 0.3;
+    blit(g, 'star', q.x, q.y, 0.05, { center: true });
+    g.globalAlpha = 1;
+  }
+  const b = bucketPos(p, round, t);
   const inside = Math.hypot(cursor.x - b.x, cursor.y - b.y) <= p.r;
   bucketShape(g, b.x, b.y, p.r, inside, px);
   if (inside) sticker(g, b.x, b.y - p.r - 0.4, 'STAY HERE!', 0.3, '#ffd23f', '#111', px);
-  // The potato rides with the cursor; the fuse ring counts the whole stage down.
+  // The potato rides with the cursor; the fuse ring counts this delivery down.
   const left = Math.max(0, (prog.fuseAt - ms) / 1000);
   potatoShape(g, cursor.x + 0.55, cursor.y + 0.65, 0.42, px, ms);
   drawFuse(g, cursor.x, cursor.y, left, px, p.fuseS);
   const secs = Math.ceil(left);
   headline(g, String(secs), WORLD_W / 2, 1.0, 1.4, secs <= 3 ? '#ff3b3b' : '#ffd23f', px);
+  sticker(g, WORLD_W - 2.0, 0.7, `DELIVERY ${round + 1}/${p.rounds}`, 0.34, '#ffffff', '#111', px);
   if (detail) headline(g, inside ? 'IN THE BUCKET!' : 'GET IN THE BUCKET!', WORLD_W / 2, WORLD_H - 0.6, 0.5, inside ? '#43e05a' : '#ffffff', px);
 }
 
@@ -900,6 +1110,12 @@ function drawChairs(g: CanvasRenderingContext2D, p: ChairsParams, prog: ChairsPr
       worldText(g, i % 2 ? '♫' : '♪', nx, ny, 0.6, { font: FONT_PIXEL, fill: '#ffd23f', stroke: '#111', strokeW: 0.1, align: 'center', baseline: 'middle' });
     }
   }
+  // Music bar: drains against the longest possible round, so the exact stop stays a surprise until the warning.
+  if (!safe) {
+    const total = p.musicMaxS * 1000;
+    const started = prog.stopAt - total;
+    timeBar(g, WORLD_W / 2 - 1.8, 1.32, 3.6, 0.22, clamp(1 - (ms - started) / total, 0, 1), warn ? '#ff3b3b' : '#da77f2', px);
+  }
   if (detail) sticker(g, WORLD_W - 1.9, 1.6, `${prog.left.length} CHAIR${prog.left.length === 1 ? '' : 'S'} · ROUND ${prog.round}`, 0.3, '#ffffff', '#111', px);
 }
 
@@ -908,17 +1124,21 @@ function drawChairs(g: CanvasRenderingContext2D, p: ChairsParams, prog: ChairsPr
 // ---------------------------------------------------------------------------
 
 function drawKeyboard(g: CanvasRenderingContext2D, p: KeyboardParams, prog: KeyboardProgress, px: number, ms: number, detail: boolean) {
-  // Word strip: typed letters green, the next one gold and pulsing, the rest blank.
+  // Phrase strip: typed letters green, the next one gold and pulsing, the rest blank; spaces are gaps.
   const n = p.word.length;
-  const bw = Math.min(1.2, (WORLD_W - 2) / n);
-  const bh = 1.3;
-  const x0 = (WORLD_W - (n * bw + (n - 1) * 0.1)) / 2;
+  const gap = 0.06;
+  const bw = Math.min(1.2, (WORLD_W - 1 - (n - 1) * gap) / n);
+  const bh = Math.min(1.3, bw * 1.25);
+  const x0 = (WORLD_W - (n * bw + (n - 1) * gap)) / 2;
+  const y0 = 0.3 + (1.3 - bh) / 2;
   for (let i = 0; i < n; i++) {
+    const ch = p.word[i];
+    if (ch === ' ') continue;
     const done = i < prog.next;
     const next = i === prog.next;
     const pulse = next ? 1 + 0.04 * Math.sin(ms / 140) : 1;
-    const r = { x: x0 + i * (bw + 0.1) - (bw * (pulse - 1)) / 2, y: 0.35 - (bh * (pulse - 1)) / 2, w: bw * pulse, h: bh * pulse };
-    keycap(g, r, done || next ? p.word[i] : '?', done ? '#69db7c' : next ? '#ffd23f' : '#f3ead7', px, done || next ? '#111' : 'rgba(17,17,17,0.35)');
+    const r = { x: x0 + i * (bw + gap) - (bw * (pulse - 1)) / 2, y: y0 - (bh * (pulse - 1)) / 2, w: bw * pulse, h: bh * pulse };
+    keycap(g, r, done || next ? ch : '?', done ? '#69db7c' : next ? '#ffd23f' : '#f3ead7', px, done || next ? '#111' : 'rgba(17,17,17,0.35)');
   }
   const want = p.word[prog.next] ?? '';
   for (const k of p.keys) {
@@ -937,14 +1157,14 @@ function drawKeyboard(g: CanvasRenderingContext2D, p: KeyboardParams, prog: Keyb
   }
   if (detail) {
     const hint = prog.next >= n ? 'DONE!' : `HOLD ON "${want}"`;
-    worldText(g, hint, WORLD_W - 0.3, 1.0, 0.42, { fill: '#5c7cfa', stroke: '#111', strokeW: 0.1, align: 'right', baseline: 'middle' });
-    if (prog.buzzes) sticker(g, 1.2, 1.0, `BZZT ×${prog.buzzes}`, 0.28, '#ffffff', '#111', px);
+    worldText(g, hint, WORLD_W - 0.3, 2.05, 0.36, { fill: '#5c7cfa', stroke: '#111', strokeW: 0.1, align: 'right', baseline: 'middle' });
+    if (prog.buzzes) sticker(g, 1.1, 2.05, `BZZT ×${prog.buzzes}`, 0.26, '#ffffff', '#111', px);
   }
 }
 
 const NUM_COLORS = ['', '#1d4ed8', '#15803d', '#dc2626', '#1e3a8a', '#7f1d1d', '#0e7490', '#111', '#6b7280'];
 
-function drawMines(g: CanvasRenderingContext2D, m: MinesParams, prog: MinesProgress, px: number, cursor: { x: number; y: number }, detail: boolean) {
+function drawMines(g: CanvasRenderingContext2D, m: MinesParams, prog: MinesProgress, px: number, ms: number, playAt: number, cursor: { x: number; y: number }, detail: boolean) {
   const cw = WORLD_W / m.cols;
   const ch = WORLD_H / m.rows;
   const bev = Math.min(cw, ch) * 0.12;
@@ -983,6 +1203,237 @@ function drawMines(g: CanvasRenderingContext2D, m: MinesParams, prog: MinesProgr
     g.setLineDash([0.12, 0.08]);
     g.strokeRect(hc * cw + bev / 2, hr * ch + bev / 2, cw - bev, ch - bev);
     g.restore();
+  }
+  // The only way a cell gets revealed: the server's timer clicks whatever is under
+  // the cursor at nextAutoAt. Everyone sees that fuse the whole time.
+  if (prog.nextAutoAt && ms >= playAt) {
+    const left = Math.max(0, (prog.nextAutoAt - ms) / 1000);
+    drawFuse(g, cursor.x, cursor.y, left, px, m.autoMaxS);
+    if (detail) {
+      const label = prog.firstDone ? `AUTO-CLICK IN ${Math.ceil(left)}` : `FIRST CLICK (SAFE) IN ${Math.ceil(left)}`;
+      sticker(g, WORLD_W / 2, 0.45, label, 0.32, left < 3 ? '#ff3b3b' : '#ffd23f', '#111', px);
+    }
+  }
+}
+
+/** Warmer/colder meter: `bars` of HUNT_BARS lit, cold blue through hot red. */
+function heatMeter(g: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number, bars: number, px: number) {
+  const n = HUNT_BARS;
+  const gap = w * 0.02;
+  const bw = (w - gap * (n - 1)) / n;
+  const x0 = cx - w / 2;
+  g.fillStyle = '#111';
+  g.fillRect(x0 - 4 * px, cy - h / 2 - 4 * px, w + 8 * px, h + 8 * px);
+  for (let i = 0; i < n; i++) {
+    const f = i / (n - 1);
+    const lit = i < bars;
+    const col = f < 0.5 ? `hsl(${210 - f * 2 * 160}, 90%, ${lit ? 55 : 22}%)` : `hsl(${50 - (f - 0.5) * 2 * 50}, 95%, ${lit ? 55 : 22}%)`;
+    g.fillStyle = col;
+    const bh = h * (0.45 + 0.55 * f);
+    g.fillRect(x0 + i * (bw + gap), cy + h / 2 - bh, bw, bh);
+  }
+}
+
+/** Vertical pressure gauge with the green zone marked. `level` 0..1 (can run above 1 before a blowout). */
+function gauge(g: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number, level: number, zone: [number, number], px: number, held = false, blown = false) {
+  const x = cx - w / 2;
+  const y = cy - h / 2;
+  g.fillStyle = '#111';
+  g.fillRect(x - 4 * px, y - 4 * px, w + 8 * px, h + 8 * px);
+  g.fillStyle = '#2b2f36';
+  g.fillRect(x, y, w, h);
+  g.fillStyle = 'rgba(67,224,90,0.35)';
+  g.fillRect(x, y + h * (1 - zone[1]), w, h * (zone[1] - zone[0]));
+  const lv = clamp(level, 0, 1);
+  const inZ = level >= zone[0] && level <= zone[1];
+  g.fillStyle = blown ? '#ff3b3b' : inZ ? '#43e05a' : level > zone[1] ? '#ff922b' : '#4dabf7';
+  g.fillRect(x + w * 0.15, y + h * (1 - lv), w * 0.7, h * lv);
+  g.strokeStyle = '#43e05a';
+  g.lineWidth = 2 * px;
+  g.strokeRect(x, y + h * (1 - zone[1]), w, h * (zone[1] - zone[0]));
+  if (held) {
+    g.strokeStyle = '#ffd23f';
+    g.lineWidth = 5 * px;
+    g.strokeRect(x - 6 * px, y - 6 * px, w + 12 * px, h + 12 * px);
+  }
+}
+
+/** Numbered tour station. */
+function stationShape(g: CanvasRenderingContext2D, x: number, y: number, r: number, label: string, color: string, px: number, next: boolean, done = false) {
+  g.fillStyle = 'rgba(0,0,0,0.25)';
+  g.beginPath();
+  g.arc(x + r * 0.08, y + r * 0.1, r, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = done ? '#69db7c' : next ? color : '#f3ead7';
+  g.beginPath();
+  g.arc(x, y, r, 0, Math.PI * 2);
+  g.fill();
+  g.lineWidth = (next ? 5 : 3) * px;
+  g.strokeStyle = '#111';
+  g.stroke();
+  worldText(g, done ? '✓' : label, x, y + r * 0.08, r * 1.05, { font: FONT_PIXEL, fill: next ? '#fff' : '#111', stroke: next ? '#111' : undefined, strokeW: 0.08, align: 'center', baseline: 'middle' });
+}
+
+function drawHunt(g: CanvasRenderingContext2D, p: HuntParams, prog: HuntProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  // Already-found treasure stays on the map.
+  for (const f of prog.found) {
+    g.globalAlpha = 0.85;
+    blit(g, 'star', f.x, f.y, 0.06, { center: true });
+    g.globalAlpha = 1;
+    g.strokeStyle = 'rgba(255,210,63,0.5)';
+    g.lineWidth = 3 * px;
+    g.beginPath();
+    g.arc(f.x, f.y, p.radius, 0, Math.PI * 2);
+    g.stroke();
+  }
+  // The meter is the whole game: hot means close, and it is noisy on purpose.
+  const hot = prog.bars >= HUNT_BARS - 1;
+  heatMeter(g, WORLD_W / 2, 0.85, 5.2, 0.9, prog.bars, px);
+  const word = prog.bars >= 9 ? 'BOILING!' : prog.bars >= 7 ? 'HOT' : prog.bars >= 5 ? 'WARM' : prog.bars >= 3 ? 'COOL' : 'COLD';
+  headline(g, word, WORLD_W / 2 + 4.4, 0.85, 0.6, prog.bars >= 7 ? '#ff3b3b' : prog.bars >= 5 ? '#ffd23f' : '#4dabf7', px);
+  // Dwell ring around the cursor while it is sitting on the treasure.
+  if (prog.dwellSince > 0) {
+    const frac = clamp((ms - prog.dwellSince) / (p.dwellS * 1000), 0, 1);
+    dwellRing(g, cursor.x, cursor.y, p.radius, frac, '#ffd23f', px);
+    sticker(g, cursor.x, cursor.y - p.radius - 0.4, `HOLD STILL ${Math.ceil(p.dwellS - frac * p.dwellS)}`, 0.3, '#ffd23f', '#111', px);
+  } else if (hot) {
+    g.save();
+    g.setLineDash([0.1, 0.1]);
+    g.strokeStyle = 'rgba(255,255,255,0.5)';
+    g.lineWidth = 3 * px;
+    g.beginPath();
+    g.arc(cursor.x, cursor.y, p.radius, 0, Math.PI * 2);
+    g.stroke();
+    g.restore();
+  }
+  if (detail) {
+    sticker(g, WORLD_W - 2.0, 0.85, `FOUND ${prog.found.length}/${p.finds}`, 0.36, '#ffffff', '#111', px);
+    if (p.decoys > 0) worldText(g, `${p.decoys} DECOY${p.decoys === 1 ? '' : 'S'} · NEVER BOILING`, 0.4, 1.55, 0.26, { fill: 'rgba(255,255,255,0.7)', stroke: '#111', strokeW: 0.07, baseline: 'middle' });
+  }
+}
+
+function drawValves(g: CanvasRenderingContext2D, p: ValvesParams, prog: ValvesProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  const levels = valveLevelsNow(p, prog, ms);
+  const n = p.valves.length;
+  const gw = Math.min(0.9, (WORLD_W - 1) / n - 0.3);
+  const gaugeY = 1.05;
+  let allIn = true;
+  for (let i = 0; i < n; i++) {
+    const v = p.valves[i];
+    const held = prog.held === i;
+    const inZ = valveInZone(p, levels[i]);
+    if (!inZ) allIn = false;
+    // Gauge strip up top, one per valve, lined up with its wheel.
+    const gx = 0.5 + ((i + 0.5) / n) * (WORLD_W - 1);
+    gauge(g, gx, gaugeY, gw, 1.5, levels[i], p.zone, px, held, levels[i] >= 1);
+    g.strokeStyle = 'rgba(255,255,255,0.18)';
+    g.lineWidth = 2 * px;
+    g.beginPath();
+    g.moveTo(gx, gaugeY + 0.8);
+    g.lineTo(v.x, v.y - p.r);
+    g.stroke();
+    // The wheel.
+    const under = Math.hypot(cursor.x - v.x, cursor.y - v.y) <= p.r;
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.beginPath();
+    g.arc(v.x + 0.08, v.y + 0.1, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = held ? '#ffd23f' : inZ ? '#20c997' : levels[i] > p.zone[1] ? '#ff922b' : '#4dabf7';
+    g.beginPath();
+    g.arc(v.x, v.y, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.lineWidth = (under || held ? 5 : 3) * px;
+    g.strokeStyle = '#111';
+    g.stroke();
+    const spin = held ? ms / 250 : 0;
+    g.lineWidth = 4 * px;
+    for (let k = 0; k < 4; k++) {
+      const a = spin + (k * Math.PI) / 4;
+      g.beginPath();
+      g.moveTo(v.x + Math.cos(a) * p.r * 0.85, v.y + Math.sin(a) * p.r * 0.85);
+      g.lineTo(v.x - Math.cos(a) * p.r * 0.85, v.y - Math.sin(a) * p.r * 0.85);
+      g.stroke();
+    }
+    g.fillStyle = '#111';
+    g.beginPath();
+    g.arc(v.x, v.y, p.r * 0.22, 0, Math.PI * 2);
+    g.fill();
+    worldText(g, String(i + 1), v.x, v.y + p.r + 0.35, 0.3, { font: FONT_PIXEL, fill: '#fff', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+    if (!inZ && detail) sticker(g, v.x, v.y - p.r - 0.35, levels[i] > p.zone[1] ? 'TOO HIGH' : 'LOW', 0.24, levels[i] > p.zone[1] ? '#ff922b' : '#4dabf7', '#111', px);
+  }
+  // The long hold: every gauge in the green for holdS seconds wins.
+  if (allIn && prog.allInSince > 0) {
+    const frac = clamp((ms - prog.allInSince) / (p.holdS * 1000), 0, 1);
+    timeBar(g, WORLD_W / 2 - 2.4, 2.1, 4.8, 0.26, frac, '#43e05a', px);
+    headline(g, `HOLD IT! ${Math.ceil(p.holdS - frac * p.holdS)}`, WORLD_W / 2, 2.6, 0.5, '#43e05a', px);
+  } else if (detail) {
+    headline(g, 'GET EVERY GAUGE INTO THE GREEN', WORLD_W / 2, 2.3, 0.42, '#ffffff', px);
+  }
+  if (detail) {
+    const hearts = Math.max(0, p.blowCap - prog.blowouts);
+    sticker(g, WORLD_W - 1.4, WORLD_H - 0.5, `${'♥'.repeat(hearts)}${'♡'.repeat(prog.blowouts)}`, 0.36, '#ffffff', '#ff3b3b', px);
+  }
+}
+
+function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: StationsProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  const n = p.stations.length;
+  // Dotted route through the visited stations and on to the next one.
+  g.save();
+  g.setLineDash([0.18, 0.14]);
+  g.lineDashOffset = -ms / 300;
+  g.lineWidth = 4 * px;
+  for (let i = 1; i <= Math.min(prog.next, n - 1); i++) {
+    const a = p.stations[i - 1];
+    const b = p.stations[i];
+    g.strokeStyle = i < prog.next ? 'rgba(105,219,124,0.8)' : 'rgba(112,72,232,0.6)';
+    g.beginPath();
+    g.moveTo(a.x, a.y);
+    g.lineTo(b.x, b.y);
+    g.stroke();
+  }
+  g.restore();
+  for (let i = 0; i < n; i++) {
+    const s = p.stations[i];
+    const next = i === prog.next;
+    const done = i < prog.next;
+    stationShape(g, s.x, s.y, p.r, String(i + 1), '#7048e8', px, next, done);
+    if (next && prog.since > 0) {
+      const frac = clamp((ms - prog.since) / (p.dwellS * 1000), 0, 1);
+      dwellRing(g, s.x, s.y, p.r + 0.25, frac, '#ffd23f', px);
+      sticker(g, s.x, s.y - p.r - 0.45, `STAY ${Math.ceil(p.dwellS - frac * p.dwellS)}`, 0.3, '#ffd23f', '#111', px);
+    } else if (next) {
+      g.save();
+      g.setLineDash([0.12, 0.1]);
+      g.lineDashOffset = -ms / 250;
+      g.strokeStyle = '#7048e8';
+      g.lineWidth = 4 * px;
+      g.beginPath();
+      g.arc(s.x, s.y, p.r + 0.25 + Math.sin(ms / 200) * 0.06, 0, Math.PI * 2);
+      g.stroke();
+      g.restore();
+    }
+  }
+  // Arrow from the cursor to the next station when it is far away.
+  const tgt = p.stations[prog.next];
+  if (tgt && detail) {
+    const d = Math.hypot(tgt.x - cursor.x, tgt.y - cursor.y);
+    if (d > p.r + 1.2) {
+      const a = Math.atan2(tgt.y - cursor.y, tgt.x - cursor.x);
+      const ax = cursor.x + Math.cos(a) * 1.0;
+      const ay = cursor.y + Math.sin(a) * 1.0;
+      g.fillStyle = '#7048e8';
+      g.strokeStyle = '#111';
+      g.lineWidth = 3 * px;
+      g.beginPath();
+      g.moveTo(ax + Math.cos(a) * 0.3, ay + Math.sin(a) * 0.3);
+      g.lineTo(ax + Math.cos(a + 2.5) * 0.25, ay + Math.sin(a + 2.5) * 0.25);
+      g.lineTo(ax + Math.cos(a - 2.5) * 0.25, ay + Math.sin(a - 2.5) * 0.25);
+      g.closePath();
+      g.fill();
+      g.stroke();
+    }
+    sticker(g, WORLD_W - 1.9, 0.6, `STOP ${Math.min(prog.next + 1, n)}/${n}`, 0.36, '#ffffff', '#111', px);
+    if (prog.cancels) sticker(g, 1.4, 0.6, `LEFT EARLY ×${prog.cancels}`, 0.26, '#ffffff', '#111', px);
   }
 }
 

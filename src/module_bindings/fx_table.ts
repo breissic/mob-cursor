@@ -11,6 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
+  roomId: __t.u32().name("room_id"),
   kind: __t.string(),
   x: __t.f64(),
   y: __t.f64(),

@@ -11,11 +11,13 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64().primaryKey(),
-  roomId: __t.u32().name("room_id"),
-  levelId: __t.u64().name("level_id"),
-  title: __t.string(),
-  who: __t.string(),
+  id: __t.u32().primaryKey(),
+  code: __t.string(),
   name: __t.string(),
-  detail: __t.string(),
+  host: __t.identity(),
+  players: __t.u32(),
+  pointerHzEffective: __t.f64().name("pointer_hz_effective"),
+  levelId: __t.u64().name("level_id"),
+  createdAt: __t.timestamp().name("created_at"),
+  lastActiveAt: __t.timestamp().name("last_active_at"),
 });

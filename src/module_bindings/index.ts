@@ -38,12 +38,13 @@ import AdminClaimReducer from "./admin_claim_reducer";
 import AdminKickReducer from "./admin_kick_reducer";
 import AdminResetRoundReducer from "./admin_reset_round_reducer";
 import AdminSetConfigReducer from "./admin_set_config_reducer";
+import AdminSetModeSettingsReducer from "./admin_set_mode_settings_reducer";
 import AdminSetPassphraseReducer from "./admin_set_passphrase_reducer";
 import AdminSetRuleReducer from "./admin_set_rule_reducer";
 import AdminStartLevelReducer from "./admin_start_level_reducer";
 import AdminStartStageReducer from "./admin_start_stage_reducer";
 import AdminStopLevelReducer from "./admin_stop_level_reducer";
-import ClickReducer from "./click_reducer";
+import CreateRoomReducer from "./create_room_reducer";
 import JoinReducer from "./join_reducer";
 import PostCommentaryReducer from "./post_commentary_reducer";
 import SetPointerReducer from "./set_pointer_reducer";
@@ -60,8 +61,10 @@ import EventLogRow from "./event_log_table";
 import FxRow from "./fx_table";
 import GhostFrameRow from "./ghost_frame_table";
 import LevelRow from "./level_table";
+import ModeSettingsRow from "./mode_settings_table";
 import PlayerRow from "./player_table";
 import PointerRow from "./pointer_table";
+import RoomRow from "./room_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -76,6 +79,9 @@ const tablesSchema = __schema({
       { accessor: 'levelId', name: 'award_level_id_idx_btree', algorithm: 'btree', columns: [
         'levelId',
       ] },
+      { accessor: 'roomId', name: 'award_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
+      ] },
     ],
     constraints: [
       { name: 'award_id_key', constraint: 'unique', columns: ['id'] },
@@ -86,6 +92,9 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'id', name: 'commentary_id_idx_btree', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { accessor: 'roomId', name: 'commentary_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
       ] },
     ],
     constraints: [
@@ -123,6 +132,9 @@ const tablesSchema = __schema({
       { accessor: 'kind', name: 'event_log_kind_idx_btree', algorithm: 'btree', columns: [
         'kind',
       ] },
+      { accessor: 'roomId', name: 'event_log_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
+      ] },
     ],
     constraints: [
       { name: 'event_log_id_key', constraint: 'unique', columns: ['id'] },
@@ -153,16 +165,33 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'level_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'roomId', name: 'level_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
+      ] },
     ],
     constraints: [
       { name: 'level_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, LevelRow),
+  modeSettings: __table({
+    name: 'mode_settings',
+    indexes: [
+      { accessor: 'kind', name: 'mode_settings_kind_idx_btree', algorithm: 'btree', columns: [
+        'kind',
+      ] },
+    ],
+    constraints: [
+      { name: 'mode_settings_kind_key', constraint: 'unique', columns: ['kind'] },
+    ],
+  }, ModeSettingsRow),
   player: __table({
     name: 'player',
     indexes: [
       { accessor: 'identity', name: 'player_identity_idx_btree', algorithm: 'btree', columns: [
         'identity',
+      ] },
+      { accessor: 'roomId', name: 'player_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
       ] },
     ],
     constraints: [
@@ -175,11 +204,29 @@ const tablesSchema = __schema({
       { accessor: 'identity', name: 'pointer_identity_idx_btree', algorithm: 'btree', columns: [
         'identity',
       ] },
+      { accessor: 'roomId', name: 'pointer_room_id_idx_btree', algorithm: 'btree', columns: [
+        'roomId',
+      ] },
     ],
     constraints: [
       { name: 'pointer_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, PointerRow),
+  room: __table({
+    name: 'room',
+    indexes: [
+      { accessor: 'code', name: 'room_code_idx_btree', algorithm: 'btree', columns: [
+        'code',
+      ] },
+      { accessor: 'id', name: 'room_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'room_code_key', constraint: 'unique', columns: ['code'] },
+      { name: 'room_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, RoomRow),
   amIAdmin: __table({
     name: 'am_i_admin',
     indexes: [
@@ -195,12 +242,13 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_kick", AdminKickReducer),
   __reducerSchema("admin_reset_round", AdminResetRoundReducer),
   __reducerSchema("admin_set_config", AdminSetConfigReducer),
+  __reducerSchema("admin_set_mode_settings", AdminSetModeSettingsReducer),
   __reducerSchema("admin_set_passphrase", AdminSetPassphraseReducer),
   __reducerSchema("admin_set_rule", AdminSetRuleReducer),
   __reducerSchema("admin_start_level", AdminStartLevelReducer),
   __reducerSchema("admin_start_stage", AdminStartStageReducer),
   __reducerSchema("admin_stop_level", AdminStopLevelReducer),
-  __reducerSchema("click", ClickReducer),
+  __reducerSchema("create_room", CreateRoomReducer),
   __reducerSchema("join", JoinReducer),
   __reducerSchema("post_commentary", PostCommentaryReducer),
   __reducerSchema("set_pointer", SetPointerReducer),

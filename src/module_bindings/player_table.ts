@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   identity: __t.identity().primaryKey(),
+  roomId: __t.u32().name("room_id"),
   name: __t.string(),
   color: __t.string(),
   team: __t.u8(),
