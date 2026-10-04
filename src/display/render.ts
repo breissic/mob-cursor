@@ -121,8 +121,82 @@ export function startRenderer(
         for (let i = 0; i < 8; i++) burst(Math.random() * WORLD_W, -0.5, 30, 1);
         add({ kind: 'text', life: 2.2, text: `${(row.who || 'GAME').toUpperCase()} WINS!`, color: '#ffd23f', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
         break;
+      case 'vote_restart':
+        shake = 0.4;
+        add({ kind: 'text', life: 1.6, text: 'NOBODY PICKED! AGAIN!', color: '#ff5a36', size: 0.7, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
       case 'dictator':
         add({ kind: 'text', life: 2, text: 'DICTATOR!', color: '#ffd23f', size: 0.5, vy: -0.4, y: row.y - 0.6 });
+        break;
+      // Red light, green light.
+      case 'light':
+        if (row.who === 'red') {
+          flash = 0.5;
+          flashColor = '255,59,59';
+          add({ kind: 'text', life: 1.1, text: 'RED LIGHT!', color: '#ff3b3b', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        } else add({ kind: 'text', life: 1, text: 'GREEN LIGHT!', color: '#43e05a', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      case 'fault':
+        shake = 0.8;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.3, text: 'YOU MOVED!', color: '#ff3b3b', size: 0.8, vy: -0.8 });
+        break;
+      // Balloon.
+      case 'save':
+        burst(row.x, row.y, 8);
+        add({ kind: 'text', life: 0.7, text: 'BOP!', color: '#ffffff', size: 0.5, vy: -1.5 });
+        break;
+      case 'drop':
+        shake = 0.8;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 20);
+        add({ kind: 'text', life: 1.3, text: 'POP!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
+        break;
+      // Mole.
+      case 'mole_hit':
+        burst(row.x, row.y, 24);
+        for (let i = 0; i < 4; i++) add({ kind: 'star', life: 0.9, vx: Math.cos(i * 1.57) * 3, vy: Math.sin(i * 1.57) * 3 - 2, size: 0.04 });
+        add({ kind: 'text', life: 1, text: 'WHACK!', color: '#ffd23f', size: 0.7, vy: -1.2 });
+        break;
+      case 'mole_miss':
+        shake = 0.3;
+        add({ kind: 'text', life: 1, text: 'MISSED!', color: '#ff5a36', size: 0.6, vy: -0.8 });
+        break;
+      // Potato.
+      case 'splash':
+        for (let i = 0; i < 3; i++) burst(row.x, row.y, 24);
+        add({ kind: 'text', life: 1.4, text: 'SPLASH!', color: '#3a86ff', size: 0.9, vy: -0.8 });
+        break;
+      case 'boom':
+        shake = 1.4;
+        flash = 1;
+        flashColor = '255,138,61';
+        for (let i = 0; i < 4; i++) burst(row.x, row.y, 30);
+        add({ kind: 'text', life: 1.5, text: 'KABOOM!', color: '#ff3b3b', size: 1, vy: -0.6 });
+        break;
+      // Chairs.
+      case 'sit':
+        burst(row.x, row.y, 20);
+        add({ kind: 'text', life: 1.2, text: 'SAFE!', color: '#43e05a', size: 0.8, vy: -0.8 });
+        break;
+      case 'no_chair':
+        shake = 1;
+        flash = 0.8;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.5, text: 'NO CHAIR!', color: '#ff3b3b', size: 0.9, vy: -0.6 });
+        break;
+      // Keyboard.
+      case 'key':
+        burst(row.x, row.y, 14);
+        add({ kind: 'text', life: 1, text: row.who || 'OK', color: '#2ec4b6', size: 0.9, vy: -1.4 });
+        break;
+      case 'buzz':
+        shake = 0.5;
+        flash = 0.4;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 0.9, text: 'BZZT!', color: '#ff3b3b', size: 0.7, vy: -0.8 });
         break;
     }
   };

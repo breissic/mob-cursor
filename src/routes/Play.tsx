@@ -198,9 +198,30 @@ function Remote({ conn, selfKey, color, name, score, team }: { conn: DbConnectio
   // Haptics + flash on big moments.
   useEffect(() => {
     const onFx = (_c: unknown, row: { kind: string }) => {
-      const v: Record<string, number | number[]> = { mine: [90, 40, 90], wall: [60, 30, 60], lose: [200], win: [30, 40, 30, 40, 30], target: 30, autoclick: [20, 30, 60], click: 15 };
+      const v: Record<string, number | number[]> = {
+        mine: [90, 40, 90],
+        wall: [60, 30, 60],
+        lose: [200],
+        win: [30, 40, 30, 40, 30],
+        target: 30,
+        autoclick: [20, 30, 60],
+        click: 15,
+        light: 40,
+        fault: [60, 30, 60],
+        save: 15,
+        drop: [80, 40, 80],
+        mole_hit: 30,
+        mole_miss: 50,
+        boom: [120, 50, 120],
+        splash: [30, 40, 30],
+        sit: 30,
+        no_chair: [80, 40, 80],
+        key: 20,
+        buzz: [70, 30, 70],
+        vote_restart: [40, 40, 40],
+      };
       if (v[row.kind] !== undefined) navigator.vibrate?.(v[row.kind]);
-      if (row.kind === 'mine' || row.kind === 'wall') {
+      if (['mine', 'wall', 'fault', 'drop', 'boom', 'no_chair', 'buzz'].includes(row.kind)) {
         wrapRef.current?.classList.remove('flash-mine');
         void wrapRef.current?.offsetWidth;
         wrapRef.current?.classList.add('flash-mine');
@@ -350,7 +371,7 @@ function Remote({ conn, selfKey, color, name, score, team }: { conn: DbConnectio
     if (!lvl) return { text: 'WAITING FOR HOST…', cls: '', game: 'LOBBY', mines: false };
     const meta = JSON.parse(lvl.params) as { playAt?: number; stage?: number; stages?: number };
     const gm = GAME_META[lvl.kind] ?? GAME_META.lobby;
-    const game = `${gm.exe} · ${meta.stage ?? 1}/${meta.stages ?? 3}`;
+    const game = lvl.kind === 'vote' ? gm.exe : `${gm.exe} · ${meta.stage ?? 1}/${meta.stages ?? 3}`;
     if (lvl.state === 'running') {
       const c = Math.ceil(((meta.playAt ?? 0) - now) / 1000);
       const mines = lvl.kind === 'minesweeper' && c <= 0;

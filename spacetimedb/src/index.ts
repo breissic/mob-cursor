@@ -14,33 +14,60 @@ import {
   VOTE_START,
   targetPos,
   voteLayout,
-  voteWinner,
+  voteResolve,
   type VoteParams,
+  type VoteProgress,
   type StageMeta,
   WORLD_H,
   WORLD_W,
   aggregate,
+  balloonStep,
   cellAt,
+  chairsStep,
   chaos as chaosOf,
   clamp,
   cursorPhysics,
   ghostKey,
+  isPlayKind,
+  keyboardStep,
   packGhosts,
   integrate,
+  makeBalloons,
+  makeChairs,
+  makeKeyboard,
   makeMaze,
   makeMines,
+  makeMoles,
+  makePotato,
+  makeRedlight,
   makeTargets,
   mazeHit,
+  moleStep,
+  potatoInBucket,
+  redlightStep,
   revealCell,
   sha256Hex,
+  shiftLevelTimes,
   tileAt,
   tileCenter,
-  type LevelKind,
+  type BalloonParams,
+  type BalloonProgress,
+  type ChairsParams,
+  type ChairsProgress,
+  type KeyboardParams,
+  type KeyboardProgress,
   type MazeParams,
   type MazeProgress,
   type MinesParams,
   type MinesProgress,
+  type MoleParams,
+  type MoleProgress,
+  type PlayKind,
+  type PotatoParams,
+  type PotatoProgress,
   type Pt,
+  type RedlightParams,
+  type RedlightProgress,
   type Rule,
   type TargetsParams,
   type TargetsProgress,
@@ -158,15 +185,19 @@ function resumeLevel(ctx: Ctx, pausedUs: bigint) {
   const remainingUs = sincePause < sinceStart ? sincePause : sinceStart;
   const fresh = pausedUs > 2n * MICROS;
   const playAt = fresh ? nowMs(ctx) + COUNTDOWN_S * 1000 : (params.playAt ?? 0) + Number(pausedUs / 1000n);
-  const deadlineUs = fresh
+  let deadlineUs = fresh
     ? BigInt(playAt) * 1000n + (remainingUs > 10n * MICROS ? remainingUs : 10n * MICROS)
     : l.deadline.microsSinceUnixEpoch + pausedUs;
-  let progress = l.progress;
-  if (l.kind === 'minesweeper') {
-    const pr = JSON.parse(l.progress) as MinesProgress;
-    progress = JSON.stringify({ ...pr, nextAutoAt: playAt + randMs(ctx) });
+  // Every in-progress timer (light flips, fuses, music stops...) moves with playAt.
+  let pr = shiftLevelTimes(JSON.parse(l.progress) as Record<string, unknown>, playAt - (params.playAt ?? 0));
+  if (l.kind === 'minesweeper') pr = { ...pr, nextAutoAt: playAt + randMs(ctx) };
+  if (l.kind === 'vote') {
+    // The picker timer is always exactly VOTE_SECS after play resumes.
+    deadlineUs = BigInt(playAt) * 1000n + BigInt(VOTE_SECS) * MICROS;
+    pr = { ...pr, endsAt: Number(deadlineUs / 1000n) };
   }
-  ctx.db.level.id.update({ ...l, params: JSON.stringify({ ...params, playAt }), progress, deadline: ts(deadlineUs) });
+  if (l.kind === 'potato') deadlineUs = BigInt((pr as PotatoProgress).fuseAt) * 1000n + MICROS;
+  ctx.db.level.id.update({ ...l, params: JSON.stringify({ ...params, playAt }), progress: JSON.stringify(pr), deadline: ts(deadlineUs) });
   if (fresh) {
     const s = startPos(l.kind, params);
     resetCursorTo(ctx, s.x, s.y);
@@ -239,7 +270,6 @@ function resetCursorTo(ctx: Ctx, x: number, y: number) {
 // Levels
 // ---------------------------------------------------------------------------
 
-type PlayKind = Exclude<LevelKind, 'lobby'>;
 const nowMs = (ctx: Ctx) => Number(now(ctx) / 1000n);
 const randMs = (ctx: Ctx) =>
   AUTO_CLICK_MIN_MS + Math.floor(ctx.random() * (AUTO_CLICK_MAX_MS - AUTO_CLICK_MIN_MS));
@@ -251,13 +281,14 @@ function playAtOf(l: { params: string }): number {
   return (JSON.parse(l.params) as Partial<StageMeta>).playAt ?? 0;
 }
 
-/** Where the cursor waits during the countdown (and respawns in the maze). */
+/** Where the cursor waits during the countdown (and respawns in the maze / after a red-light fault). */
 function startPos(kind: string, params: unknown) {
   if (kind === 'vote') return VOTE_START;
   if (kind === 'maze') {
     const m = params as MazeParams;
     return tileCenter(m, m.start.c, m.start.r);
   }
+  if (kind === 'redlight') return (params as RedlightParams).start;
   return { x: WORLD_W / 2, y: WORLD_H / 2 };
 }
 
@@ -294,6 +325,31 @@ function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
     progress = { ...m.progress, nextAutoAt: playAt + randMs(ctx) } satisfies MinesProgress;
     secret = m.secret;
     secs = sp.secs;
+  } else if (kind === 'redlight') {
+    const sp = STAGE_SPECS.redlight[stage - 1];
+    ({ params, progress } = makeRedlight(rand, sp, playAt));
+    secs = sp.secs;
+  } else if (kind === 'balloon') {
+    const sp = STAGE_SPECS.balloon[stage - 1];
+    ({ params, progress } = makeBalloons(rand, sp, playAt));
+    secs = sp.secs;
+  } else if (kind === 'mole') {
+    const sp = STAGE_SPECS.mole[stage - 1];
+    ({ params, progress } = makeMoles(sp, playAt));
+    secs = sp.secs;
+  } else if (kind === 'potato') {
+    const sp = STAGE_SPECS.potato[stage - 1];
+    ({ params, progress } = makePotato(rand, sp, playAt));
+    // The stage ends when the fuse does; the deadline is only a safety net.
+    secs = sp.fuseS + 1;
+  } else if (kind === 'chairs') {
+    const sp = STAGE_SPECS.chairs[stage - 1];
+    ({ params, progress } = makeChairs(rand, sp, playAt));
+    secs = sp.secs;
+  } else if (kind === 'keyboard') {
+    const sp = STAGE_SPECS.keyboard[stage - 1];
+    ({ params, progress } = makeKeyboard(rand, sp));
+    secs = sp.secs;
   }
   const start = startPos(kind, params);
   const row = ctx.db.level.insert({
@@ -314,13 +370,18 @@ function startLevel(ctx: Ctx, kind: PlayKind, stage = 1) {
   log(ctx, 'level_start', '', { kind, stage, levelId: row.id.toString() });
 }
 
-/** Party flow: stage 1..STAGES of a game, then the next game. */
-/** Party flow: stage 1..STAGES of a game, then the mob votes for the next game. */
+/**
+ * Party flow. A round with no game on the board opens with a random game (never
+ * the picker). A game runs stage 1..STAGES; once all three are done, or the run
+ * is lost, the mob picks the next game. There is no fixed rotation.
+ */
 function nextUp(ctx: Ctx): { kind: PlayKind; stage: number } | 'vote' {
   const cur = currentLevel(ctx);
-  if (!cur || !LEVEL_ROTATION.includes(cur.kind as PlayKind)) return 'vote';
+  if (!cur || !isPlayKind(cur.kind) || cur.state === 'skipped') {
+    return { kind: LEVEL_ROTATION[ctx.random.integerInRange(0, LEVEL_ROTATION.length - 1)], stage: 1 };
+  }
   const stage = stageOf(cur);
-  if (stage < STAGES) return { kind: cur.kind as PlayKind, stage: stage + 1 };
+  if (cur.state !== 'lost' && stage < STAGES) return { kind: cur.kind, stage: stage + 1 };
   return 'vote';
 }
 
@@ -330,28 +391,30 @@ function startNext(ctx: Ctx) {
   else startLevel(ctx, n.kind, n.stage);
 }
 
-/** Vote round: one card per game; whatever the cursor hovers when time runs out wins. */
+/** Picker round: one card per game; the card the cursor is inside when the timer hits zero is the next game. */
 function startVote(ctx: Ctx) {
   const cur = currentLevel(ctx);
   if (cur && cur.state === 'running') endLevel(ctx, cur.id, 'skipped');
   for (const v of [...ctx.db.clickVote.iter()]) ctx.db.clickVote.identity.delete(v.identity);
   for (const a of [...ctx.db.advanceSchedule.iter()]) ctx.db.advanceSchedule.scheduledId.delete(a.scheduledId);
   const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
+  const endsAt = playAt + VOTE_SECS * 1000;
   const params: VoteParams & StageMeta = {
     cards: voteLayout(LEVEL_ROTATION),
-    lastKind: cur && LEVEL_ROTATION.includes(cur.kind as PlayKind) ? cur.kind : undefined,
+    lastKind: cur && isPlayKind(cur.kind) ? cur.kind : undefined,
     stage: 1,
     stages: 1,
     playAt,
   };
+  const progress: VoteProgress = { endsAt, restarts: 0 };
   ctx.db.level.insert({
     id: 0n,
     kind: 'vote',
     state: 'running',
     params: JSON.stringify(params),
-    progress: '{}',
+    progress: JSON.stringify(progress),
     startedAt: ctx.timestamp,
-    deadline: ts(BigInt(playAt) * 1000n + BigInt(VOTE_SECS) * MICROS),
+    deadline: ts(BigInt(endsAt) * 1000n),
     endedAt: undefined,
     score: 0,
     chaosSum: 0,
@@ -361,16 +424,29 @@ function startVote(ctx: Ctx) {
   log(ctx, 'vote_start', '', {});
 }
 
-/** Close the vote and start the winner. Returns where the new level's cursor starts. */
+/**
+ * Picker timer hit zero. Cursor inside a card: that game starts now (stage 1);
+ * returns where its cursor starts. Cursor in a gap: restart the timer, picker
+ * stays up, returns null.
+ */
 function resolveVote(ctx: Ctx, levelId: bigint, x: number, y: number) {
   const l = ctx.db.level.id.find(levelId);
   if (!l || l.state !== 'running') return null;
   const p = JSON.parse(l.params) as VoteParams;
-  const win = voteWinner(p.cards, x, y);
-  ctx.db.level.id.update({ ...l, state: 'won', endedAt: ctx.timestamp, progress: JSON.stringify({ chosen: win.kind }) });
+  const prog = JSON.parse(l.progress) as VoteProgress;
+  const r = voteResolve(p, prog, x, y, nowMs(ctx));
+  if (!('chosen' in r)) {
+    ctx.db.level.id.update({ ...l, progress: JSON.stringify(r.prog), deadline: ts(BigInt(r.prog.endsAt) * 1000n) });
+    fx(ctx, 'vote_restart', x, y);
+    log(ctx, 'vote_restart', '', { restarts: r.prog.restarts });
+    return null;
+  }
+  const win = r.chosen;
+  ctx.db.level.id.update({ ...l, state: 'won', endedAt: ctx.timestamp, progress: JSON.stringify({ ...prog, chosen: win.kind }) });
   fx(ctx, 'voted', win.x + win.w / 2, win.y + win.h / 2, win.kind);
   log(ctx, 'vote_result', '', { chosen: win.kind });
-  startLevel(ctx, win.kind as PlayKind, 1);
+  if (!isPlayKind(win.kind)) return null;
+  startLevel(ctx, win.kind, 1);
   const nl = currentLevel(ctx);
   return nl ? startPos(nl.kind, JSON.parse(nl.params)) : null;
 }
@@ -698,6 +774,9 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
   if (running && !countingDown) {
     let progress = running.progress;
     let outcome: 'won' | 'lost' | null = null;
+    const timeUp = tNow >= running.deadline.microsSinceUnixEpoch;
+    const tMs = Number(tNow / 1000n);
+    const rand = () => ctx.random();
     if (running.kind === 'targets') {
       const p = JSON.parse(running.params) as TargetsParams;
       const prog = JSON.parse(progress) as TargetsProgress;
@@ -728,8 +807,75 @@ export const tick = spacetimedb.reducer({ onSchedule: tickSchedule }, { arg: tic
         const tl = tileAt(m, body.x, body.y);
         if (tl.c === m.goal.c && tl.r === m.goal.r) outcome = 'won';
       }
+    } else if (running.kind === 'redlight') {
+      const p = JSON.parse(running.params) as RedlightParams;
+      const prog = JSON.parse(progress) as RedlightProgress;
+      const r = redlightStep(p, prog, body, tMs, rand);
+      body = r.body;
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      for (const e of r.events) {
+        if (e === 'fault') {
+          fx(ctx, 'fault', before.x, before.y);
+          log(ctx, 'fault', '', { faults: r.prog.faults, of: p.faultCap });
+        } else fx(ctx, 'light', WORLD_W / 2, 0.9, e);
+      }
+      if (r.won) outcome = 'won';
+      else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+    } else if (running.kind === 'balloon') {
+      const p = JSON.parse(running.params) as BalloonParams;
+      const prog = JSON.parse(progress) as BalloonProgress;
+      const r = balloonStep(p, prog, tMs, body, rand);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      for (const e of r.events) {
+        fx(ctx, e.kind, e.x, e.y);
+        if (e.kind === 'drop') log(ctx, 'drop', '', { drops: r.prog.drops, of: p.dropCap });
+      }
+      if (r.prog.drops >= p.dropCap) outcome = 'lost';
+      else if (timeUp) outcome = 'won'; // survived the stage timer
+    } else if (running.kind === 'mole') {
+      const p = JSON.parse(running.params) as MoleParams;
+      const prog = JSON.parse(progress) as MoleProgress;
+      const r = moleStep(p, prog, tMs, body, rand);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event === 'hit' || r.event === 'miss') {
+        const h = p.holes[prog.up];
+        fx(ctx, r.event === 'hit' ? 'mole_hit' : 'mole_miss', h.x, h.y);
+        log(ctx, r.event === 'hit' ? 'mole_hit' : 'mole_miss', '', { score: r.prog.score, of: p.target, misses: r.prog.misses });
+      }
+      if (r.prog.score >= p.target) outcome = 'won';
+      else if (r.prog.misses >= p.missCap) outcome = 'lost';
+    } else if (running.kind === 'potato') {
+      const p = JSON.parse(running.params) as PotatoParams;
+      const prog = JSON.parse(progress) as PotatoProgress;
+      if (tMs >= prog.fuseAt) {
+        const inside = potatoInBucket(p, (tMs - playAtOf(running)) / 1000, body.x, body.y);
+        fx(ctx, inside ? 'splash' : 'boom', body.x, body.y);
+        log(ctx, 'potato', '', { inside });
+        outcome = inside ? 'won' : 'lost';
+      }
+    } else if (running.kind === 'chairs') {
+      const p = JSON.parse(running.params) as ChairsParams;
+      const prog = JSON.parse(progress) as ChairsProgress;
+      const r = chairsStep(p, prog, tMs, body, rand);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const sat = r.prog.sat >= 0 ? p.chairs[r.prog.sat] : null;
+        fx(ctx, r.event === 'lost' ? 'no_chair' : 'sit', sat ? sat.x + sat.w / 2 : body.x, sat ? sat.y + sat.h / 2 : body.y);
+        log(ctx, 'chairs', '', { event: r.event, round: prog.round, left: r.prog.left.length });
+        if (r.event === 'won') outcome = 'won';
+        else if (r.event === 'lost') outcome = 'lost';
+      }
+    } else if (running.kind === 'keyboard') {
+      const p = JSON.parse(running.params) as KeyboardParams;
+      const prog = JSON.parse(progress) as KeyboardProgress;
+      const r = keyboardStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        fx(ctx, r.event === 'key' ? 'key' : 'buzz', body.x, body.y, r.event === 'key' ? p.word[prog.next] : r.prog.onKey);
+        log(ctx, r.event, '', { typed: p.word.slice(0, r.prog.next), word: p.word });
+      }
+      if (r.won) outcome = 'won';
     }
-    const timeUp = tNow >= running.deadline.microsSinceUnixEpoch;
     if (running.kind === 'vote') {
       if (timeUp) {
         const s = resolveVote(ctx, running.id, body.x, body.y);
@@ -947,15 +1093,15 @@ export const admin_start_level = spacetimedb.reducer({ kind: t.string() }, (ctx,
   requireAdmin(ctx);
   if (kind === 'next') return startNext(ctx);
   if (kind === 'vote') return startVote(ctx);
-  if (!LEVEL_ROTATION.includes(kind as PlayKind)) throw new SenderError(`unknown level ${kind}`);
-  startLevel(ctx, kind as PlayKind, 1);
+  if (!isPlayKind(kind)) throw new SenderError(`unknown level ${kind}`);
+  startLevel(ctx, kind, 1);
 });
 
 export const admin_start_stage = spacetimedb.reducer({ kind: t.string(), stage: t.u32() }, (ctx, { kind, stage }) => {
   requireAdmin(ctx);
-  if (!LEVEL_ROTATION.includes(kind as PlayKind)) throw new SenderError(`unknown level ${kind}`);
+  if (!isPlayKind(kind)) throw new SenderError(`unknown level ${kind}`);
   if (stage < 1 || stage > STAGES) throw new SenderError(`stage must be 1..${STAGES}`);
-  startLevel(ctx, kind as PlayKind, stage);
+  startLevel(ctx, kind, stage);
 });
 
 export const admin_stop_level = spacetimedb.reducer(ctx => {

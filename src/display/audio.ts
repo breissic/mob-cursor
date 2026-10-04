@@ -62,6 +62,36 @@ export function sfx(kind: string) {
       return tone(160, 0.3, 'square', 0.08, 40);
     case 'dictator':
       return tone(220, 0.4, 'sawtooth', 0.07, 440);
+    case 'light':
+      // Red = falling two-tone, green = rising.
+      tone(880, 0.1, 'square', 0.08);
+      return setTimeout(() => tone(660, 0.18, 'square', 0.08), 110);
+    case 'fault':
+    case 'no_chair':
+      return tone(140, 0.3, 'sawtooth', 0.12, 60);
+    case 'save':
+      return tone(700, 0.07, 'triangle', 0.07, 1100);
+    case 'drop':
+      return tone(400, 0.25, 'sawtooth', 0.1, 90);
+    case 'mole_hit':
+      tone(520, 0.06, 'square', 0.09);
+      return setTimeout(() => tone(1040, 0.12, 'square', 0.08), 60);
+    case 'mole_miss':
+      return tone(260, 0.18, 'triangle', 0.07, 180);
+    case 'splash':
+      return tone(900, 0.3, 'triangle', 0.08, 300);
+    case 'boom':
+      tone(70, 0.7, 'sawtooth', 0.16, 25);
+      return tone(140, 0.35, 'square', 0.08, 35);
+    case 'sit':
+      [523, 784].forEach((f, i) => setTimeout(() => tone(f, 0.15, 'square', 0.08), i * 90));
+      return;
+    case 'key':
+      return tone(1200, 0.08, 'square', 0.07, 1500);
+    case 'buzz':
+      return tone(110, 0.3, 'sawtooth', 0.12);
+    case 'vote_restart':
+      return tone(330, 0.2, 'square', 0.08, 220);
     case 'win':
       [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.25, 'square', 0.08), i * 120));
       return;
