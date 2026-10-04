@@ -78,6 +78,45 @@ import {
   voteLayout,
   voteResolve,
   VOTE_SECS,
+  pickCards,
+  PICK_CARDS,
+  postIntegrate,
+  WRONG_MS,
+  makeEcho,
+  echoStep,
+  echoLit,
+  makeCrane,
+  craneStep,
+  craneMarkerX,
+  craneHeight,
+  makeSpotlight,
+  spotlightStep,
+  spotPos,
+  spotHp,
+  decoyPos,
+  makeSheep,
+  sheepStep,
+  sheepAt,
+  makeIce,
+  iceStep,
+  makePlank,
+  plankStep,
+  plankFill,
+  makeSeesaw,
+  seesawStep,
+  makeBelts,
+  beltsStep,
+  beltCell,
+  beltDir,
+  beltsReversed,
+  makeNeedle,
+  needleStep,
+  needleGapY,
+  NEEDLE_TOP,
+  makeWires,
+  wiresStep,
+  stationsRevealed,
+  dist,
   VOTE_START,
   WORLD_H,
   WORLD_W,
@@ -245,7 +284,7 @@ test('every playable mode has settings with labels, a stage-1 default inside its
     }
     for (let stage = 1; stage <= STAGES; stage++) {
       const secs = stageSeconds(kind, stageSpec(kind, stage));
-      assert.ok(secs >= 45 && secs <= 150, `${kind} stage ${stage} lasts ${secs}s`);
+      assert.ok(secs >= 45 && secs <= 200, `${kind} stage ${stage} lasts ${secs}s`);
     }
   }
   assert.ok(!isPlayKind('vote') && !isPlayKind('lobby') && !isPlayKind(undefined));
@@ -276,7 +315,17 @@ test('stages 2 and 3 get harder on top of whatever stage 1 is set to', () => {
     keyboard: (a, b) => b.dwellMs < a.dwellMs && b.typos < a.typos,
     hunt: (a, b) => b.finds > a.finds && b.radius < a.radius && b.dwellS > a.dwellS && b.decoys > a.decoys && b.traps <= a.traps,
     valves: (a, b) => b.valves > a.valves && b.drift > a.drift && b.holdS > a.holdS,
-    stations: (a, b) => b.stations > a.stations && b.dwellS < a.dwellS && b.skips <= a.skips,
+    stations: (a, b) => b.stations > a.stations && b.dwellS < a.dwellS && b.skips <= a.skips && b.revealS < a.revealS,
+    echo: (a, b) => b.pads >= a.pads && b.rounds > a.rounds && b.dwellMs < a.dwellMs && b.showMs < a.showMs,
+    crane: (a, b) => b.periodS < a.periodS && b.tol < a.tol && b.target > a.target,
+    spotlight: (a, b) => b.radius < a.radius && b.speed > a.speed && b.lanes >= a.lanes,
+    sheep: (a, b) => b.n > a.n && b.wander > a.wander && b.penW < a.penW,
+    ice: (a, b) => b.gates > a.gates && b.r < a.r && b.slide > a.slide,
+    plank: (a, b) => b.tiles > a.tiles && b.deadband < a.deadband && b.shove >= a.shove,
+    seesaw: (a, b) => b.mass > a.mass && b.pocketW < a.pocketW && b.target > a.target,
+    belts: (a, b) => b.beltCols > a.beltCols && b.speed > a.speed && b.hazards > a.hazards,
+    needle: (a, b) => b.walls > a.walls && b.gapH < a.gapH && b.periodS < a.periodS,
+    wires: (a, b) => b.order > a.order && b.dwellMs < a.dwellMs && b.decoys > a.decoys,
   };
   for (const kind of LEVEL_ROTATION) {
     const s1 = stageSpec(kind, 1);
@@ -859,7 +908,7 @@ test('stations: visit in order, dwell per station, leaving early cancels that st
   const sp = stageSpec('stations', 1);
   const { params: p, progress: p0 } = makeStations(seeded(14), sp);
   assert.equal(p.stations.length, sp.stations);
-  assert.ok(sp.stations >= 6);
+  assert.ok(sp.stations >= 4);
   let prev = { x: WORLD_W / 2, y: WORLD_H / 2 };
   for (const s of p.stations) {
     assert.ok(Math.hypot(s.x - prev.x, s.y - prev.y) > 2.5, 'each station is a trip');
@@ -897,13 +946,14 @@ test('stations: visit in order, dwell per station, leaving early cancels that st
 // Picker, resume, ghosts
 // ---------------------------------------------------------------------------
 
-test('picker: one card per playable game (12), cards fit the field and do not overlap, start spot is outside every card', () => {
-  const cards = voteLayout(LEVEL_ROTATION);
-  assert.equal(cards.length, LEVEL_ROTATION.length);
-  assert.equal(LEVEL_ROTATION.length, 12);
+test('picker: the catalog has 22 games, a PICK_CARDS subset fits the field without overlap, start spot is outside every card', () => {
+  assert.equal(LEVEL_ROTATION.length, 22);
+  const kinds = pickCards(seeded(3), undefined);
+  const cards = voteLayout(kinds);
+  assert.equal(cards.length, PICK_CARDS);
   assert.deepEqual(
     cards.map(c => c.kind),
-    [...LEVEL_ROTATION]
+    [...kinds]
   );
   for (const c of cards) {
     assert.ok(c.x >= 0 && c.x + c.w <= WORLD_W && c.y >= 0 && c.y + c.h <= WORLD_H, JSON.stringify(c));
@@ -917,7 +967,7 @@ test('picker: one card per playable game (12), cards fit the field and do not ov
 });
 
 test('picker: hover is geometric; timer end inside a card picks it, in a gap restarts the timer', () => {
-  const cards = voteLayout(LEVEL_ROTATION);
+  const cards = voteLayout(pickCards(seeded(3), undefined));
   for (const c of cards) assert.equal(voteHover(cards, c.x + c.w / 2, c.y + c.h / 2), c);
   assert.equal(voteHover(cards, VOTE_START.x, VOTE_START.y), null);
   const p = { cards };
@@ -973,4 +1023,443 @@ test('ghost keys are stable and spread out', () => {
   assert.equal(ghostKey(ids[0]), ghostKey(ids[0]));
   const keys = new Set(ids.map(ghostKey));
   assert.ok(keys.size >= 198, `only ${keys.size} distinct keys for 200 ids`);
+});
+
+// ---------------------------------------------------------------------------
+// The newer modes
+// ---------------------------------------------------------------------------
+
+test('echo: the show reveals the secret pad by pad, then retracing in order advances; a wrong pad is a fault that restarts the round', () => {
+  const sp = stageSpec('echo', 1);
+  const { params: p, progress: p0, secret } = makeEcho(seeded(41), sp, 1000);
+  assert.equal(p.pads.length, sp.pads);
+  assert.equal(secret.seq.length, sp.startLen + sp.rounds - 1);
+  assert.deepEqual(p0.shown, [], 'nothing revealed before the show');
+  for (let i = 1; i < secret.seq.length; i++) assert.notEqual(secret.seq[i], secret.seq[i - 1], 'no back-to-back repeats');
+  const far = { x: 0.2, y: 0.2 };
+  // Show: one flash per slot, each revealing the next secret pad into public progress.
+  let r = echoStep(p, p0, secret, p0.showAt - 1, far);
+  assert.equal(r.prog, p0, 'dark gap before the show: same object');
+  r = echoStep(p, p0, secret, p0.showAt, far);
+  assert.equal(r.event, 'flash');
+  assert.deepEqual(r.prog.shown, [secret.seq[0]]);
+  assert.equal(echoLit(p, r.prog, r.prog.showAt - p.showMs), secret.seq[0], 'the revealed pad is lit at the start of its slot');
+  assert.equal(echoLit(p, r.prog, r.prog.showAt - 1), -1, 'and dark at the end of it');
+  for (let i = 1; i < p0.len; i++) {
+    r = echoStep(p, r.prog, secret, r.prog.showAt, far);
+    assert.equal(r.event, 'flash');
+  }
+  assert.deepEqual(r.prog.shown, secret.seq.slice(0, p0.len));
+  // Cursor on a pad during the show does nothing.
+  assert.equal(echoStep(p, r.prog, secret, r.prog.showAt - 10, p.pads[secret.seq[0]]).prog, r.prog);
+  r = echoStep(p, r.prog, secret, r.prog.showAt, far);
+  assert.equal(r.event, 'go');
+  assert.equal(r.prog.phase, 'retrace');
+  // Retrace: dwell on the first pad.
+  const first = p.pads[secret.seq[0]];
+  let t = r.prog.showAt + 500;
+  r = echoStep(p, r.prog, secret, t, first);
+  assert.equal(r.prog.since, t);
+  r = echoStep(p, r.prog, secret, t + p.dwellMs - 1, first);
+  assert.equal(r.event, null);
+  r = echoStep(p, r.prog, secret, t + p.dwellMs, first);
+  assert.equal(r.event, 'pad');
+  assert.equal(r.prog.pos, 1);
+  // Wrong pad: settle on it -> fault, round restarts (show again, same length).
+  const wrongIdx = p.pads.findIndex((_, i) => i !== secret.seq[1] && i !== secret.seq[0]);
+  t += p.dwellMs + 200;
+  r = echoStep(p, r.prog, secret, t, far);
+  r = echoStep(p, r.prog, secret, t + 50, p.pads[wrongIdx]);
+  assert.equal(r.prog.wrongSince, t + 50);
+  r = echoStep(p, r.prog, secret, t + 50 + WRONG_MS, p.pads[wrongIdx]);
+  assert.equal(r.event, 'fault');
+  assert.equal(r.prog.faults, 1);
+  assert.equal(r.prog.phase, 'show');
+  assert.equal(r.prog.len, p0.len, 'same round again');
+  assert.deepEqual(r.prog.shown, []);
+  // Leaving the right pad early is also a fault.
+  let q = { ...r.prog, phase: 'retrace' as const, pos: 0, onPad: secret.seq[0], since: 5000, wrongSince: 0 };
+  const left = echoStep(p, q, secret, 5100, far);
+  assert.equal(left.event, 'fault');
+  // Finishing the last round wins.
+  q = { ...p0, phase: 'retrace', round: p.rounds, len: 1, pos: 0, onPad: secret.seq[0], since: 7000 };
+  const w = echoStep(p, q, secret, 7000 + p.dwellMs, first);
+  assert.ok(w.won);
+  const s3 = stageSpec('echo', 3);
+  assert.ok(s3.pads > sp.pads && s3.rounds > sp.rounds && s3.dwellMs < sp.dwellMs);
+});
+
+test('crane: holding the lever drops the block where the swing is; centred = clean, off = narrower block + fault, way off = topple', () => {
+  const sp = stageSpec('crane', 1);
+  const { params: p, progress: p0 } = makeCrane(sp);
+  assert.equal(craneHeight(p0), 0);
+  const lever = { x: p.lever.x + p.lever.w / 2, y: p.lever.y + p.lever.h / 2 };
+  // Marker is a public sine: centred at t = 0 and every half period.
+  assert.ok(Math.abs(craneMarkerX(p, 0) - WORLD_W / 2) < 1e-9);
+  assert.ok(Math.abs(craneMarkerX(p, p.periodS / 4) - (WORLD_W / 2 + p.amp)) < 1e-6);
+  let r = craneStep(p, p0, 1000, 0, lever);
+  assert.equal(r.prog.since, 1000);
+  r = craneStep(p, r.prog, 1000 + p.dwellMs - 1, 0, lever);
+  assert.equal(r.event, null);
+  r = craneStep(p, r.prog, 1000 + p.dwellMs, 0, lever);
+  assert.equal(r.event, 'drop');
+  assert.equal(craneHeight(r.prog), 1);
+  assert.equal(r.prog.blocks[1].w, p0.blocks[0].w, 'a centred drop keeps the width');
+  assert.equal(r.prog.since, -1, 'must leave the lever before the next drop');
+  assert.equal(craneStep(p, r.prog, 5000, 0, lever).prog, r.prog);
+  r = craneStep(p, r.prog, 5000, 0, { x: 0.5, y: 8 });
+  assert.equal(r.prog.since, 0);
+  // Misaligned: marker well off but still over the block.
+  const tOff = p.periodS / 4; // marker at +amp
+  const base = { ...r.prog, blocks: [{ x: WORLD_W / 2 + p.amp - 1.2, w: 3 }], since: 2000 };
+  r = craneStep(p, base, 2000 + p.dwellMs, tOff, lever);
+  assert.equal(r.event, 'miss');
+  assert.equal(r.prog.faults, 1);
+  assert.ok(r.prog.blocks[1].w < 3 && r.prog.blocks[1].w > 0, 'the new block is narrower');
+  // Topple: marker misses the stack entirely.
+  const miss = { ...r.prog, blocks: [{ x: WORLD_W / 2 - p.amp, w: 2 }], since: 3000, toppled: false };
+  r = craneStep(p, miss, 3000 + p.dwellMs, tOff, lever);
+  assert.equal(r.event, 'topple');
+  assert.ok(r.prog.toppled);
+  // Tall enough wins.
+  const tall = { ...p0, blocks: Array.from({ length: p.target }, () => ({ x: WORLD_W / 2, w: 3 })), since: 4000 };
+  assert.ok(craneStep(p, tall, 4000 + p.dwellMs, 0, lever).won);
+  const s3 = stageSpec('crane', 3);
+  assert.ok(s3.periodS < sp.periodS && s3.tol < sp.tol && s3.target > sp.target);
+});
+
+test('spotlight: inside the light nothing drains; outside drains health per second; the end of the path with health left wins', () => {
+  const sp = stageSpec('spotlight', 1);
+  const { params: p, progress: p0 } = makeSpotlight(sp, 1000);
+  assert.ok(p.length / p.speed > 60, 'a real walk');
+  assert.equal(stageSeconds('spotlight', sp), Math.ceil(p.length / p.speed) + 5);
+  const on = spotPos(p, 2);
+  let r = spotlightStep(p, p0, 3000, 2, on);
+  assert.equal(r.prog, p0, 'inside, same object');
+  assert.ok(!r.won && !r.lost);
+  const far = { x: on.x < 8 ? 15.5 : 0.5, y: on.y < 4.5 ? 8.5 : 0.5 };
+  r = spotlightStep(p, p0, 3000, 2, far);
+  assert.equal(r.event, 'out');
+  assert.equal(r.prog.at, 3000);
+  r = spotlightStep(p, r.prog, 5000, 4, far);
+  assert.ok(Math.abs(r.prog.hp - (p.hp - 2)) < 1e-6, 'two seconds outside = two hp');
+  assert.ok(Math.abs(spotHp(r.prog, 6000) - (p.hp - 3)) < 1e-6, 'readers see the live drain');
+  r = spotlightStep(p, r.prog, 6000, 5, spotPos(p, 5));
+  assert.equal(r.event, 'in');
+  assert.ok(Math.abs(r.prog.hp - (p.hp - 3)) < 1e-6);
+  // Out of health loses; at the end with health wins.
+  const dead = spotlightStep(p, { hp: 1, at: 0, outside: true }, 2000, 5, far);
+  assert.ok(dead.lost);
+  const tEnd = p.length / p.speed + 1;
+  assert.ok(spotlightStep(p, { hp: 3, at: 0, outside: false }, 1000, tEnd, spotPos(p, tEnd)).won);
+  // Decoy sits elsewhere on the same path.
+  assert.ok(dist(decoyPos(p, 2), spotPos(p, 2)) > 1);
+  const s3 = stageSpec('spotlight', 3);
+  assert.ok(s3.radius < sp.radius && s3.speed > sp.speed && s3.decoy === 1);
+});
+
+test('sheep: deterministic wander from the seed, the cursor nudges a sheep toward the pen, all penned for the hold wins, a gate escape counts', () => {
+  const sp = stageSpec('sheep', 1);
+  const { params: p, progress: p0 } = makeSheep(seeded(51), sp, 1000);
+  assert.equal(p0.sheep.length, sp.n);
+  assert.ok(p0.sheep.every(s => !s.in && s.x < WORLD_W / 2), 'sheep start on the open side');
+  // Same seed, same wander.
+  const a = sheepStep(p, p0, 1000 + 5000, 0.066, { x: -5, y: -5 });
+  const b = sheepStep(p, p0, 1000 + 5000, 0.066, { x: -5, y: -5 });
+  assert.deepEqual(a.prog, b.prog);
+  assert.ok(a.prog !== p0, 'by then at least one sheep turned (rebased)');
+  // Positions extrapolate linearly between writes.
+  const s0 = p0.sheep[0];
+  const at = sheepAt(p0, 2000)[0];
+  assert.ok(Math.abs(at.x - (s0.x + s0.vx)) < 1e-6 && Math.abs(at.y - (s0.y + s0.vy)) < 1e-6);
+  // Push: cursor next to sheep 0 sends it toward the pen.
+  const near = { x: s0.x + 0.3, y: s0.y };
+  const r = sheepStep(p, p0, 1066, 0.066, near);
+  const pushed = r.prog.sheep[0];
+  assert.ok(pushed.pushed);
+  const penC = { x: p.pen.x + p.pen.w * 0.6, y: p.pen.y + p.pen.h / 2 };
+  assert.ok(pushed.vx > 0 && dist({ x: pushed.x + pushed.vx, y: pushed.y + pushed.vy }, penC) < dist(pushed, penC), 'heading toward the pen');
+  assert.ok(r.events.some(e => e.kind === 'push' && e.i === 0));
+  // Entering through the open side flips `in`; all in starts the hold; the hold wins.
+  const gateX = p.pen.x - 0.05;
+  const midY = p.pen.y + p.pen.h / 2;
+  const entering = { ...p0, at: 10_000, sheep: p0.sheep.map(() => ({ x: gateX, y: midY, vx: 1, vy: 0, turnAt: 99_999_999, pushed: false, in: false })) };
+  const q = sheepStep(p, entering, 10_200, 0.2, { x: -5, y: -5 });
+  assert.ok(q.prog.sheep.every(s => s.in), 'through the gate');
+  assert.ok(q.events.filter(e => e.kind === 'in').length === p.n);
+  assert.equal(q.prog.inSince, 10_200);
+  // Inside the pen, moving into a fence bounces instead of leaving.
+  const fenceWard = { ...q.prog, at: 10_200, sheep: q.prog.sheep.map(s => ({ ...s, x: p.pen.x + p.pen.w - 0.1, vx: 2, vy: 0, turnAt: 99_999_999 })) };
+  const bounced = sheepStep(p, fenceWard, 10_400, 0.2, { x: -5, y: -5 });
+  assert.ok(bounced.prog.sheep.every(s => s.in && s.vx < 0), 'fence bounce keeps them in');
+  assert.equal(bounced.prog.escapes, 0);
+  const held = sheepStep(p, { ...bounced.prog, inSince: 10_200, sheep: bounced.prog.sheep.map(s => ({ ...s, vx: 0, vy: 0 })) }, 10_200 + p.holdS * 1000, 0.066, { x: -5, y: -5 });
+  assert.ok(held.won);
+  // Wandering back out through the gate is an escape.
+  const leaving = { ...q.prog, at: 20_000, inSince: 20_000, sheep: q.prog.sheep.map(s => ({ ...s, x: p.pen.x + 0.1, y: midY, vx: -2, vy: 0, turnAt: 99_999_999 })) };
+  const esc = sheepStep(p, leaving, 20_200, 0.2, { x: -5, y: -5 });
+  assert.equal(esc.prog.escapes, p.n);
+  assert.ok(esc.prog.sheep.every(s => !s.in));
+  assert.equal(esc.prog.inSince, 0);
+  const s3 = stageSpec('sheep', 3);
+  assert.ok(s3.n > sp.n && s3.wander > sp.wander && s3.penW < sp.penW);
+});
+
+test('ice: slide keeps part of the old velocity after integrate; stopping inside a gate clears it, sliding through is a fault', () => {
+  const sp = stageSpec('ice', 1);
+  const { params: p, progress: p0 } = makeIce(seeded(61), sp);
+  assert.equal(p.gates.length, sp.gates);
+  // postIntegrate: with slide the new velocity is between the old and the spring's.
+  const prev = { x: 5, y: 5, vx: 4, vy: 0 };
+  const next = { x: 5.1, y: 5, vx: 1, vy: 0 };
+  const slid = postIntegrate('ice', p, prev, next, 0.1, 1);
+  assert.ok(slid.vx > next.vx && slid.vx < prev.vx, `slide blends velocity: ${slid.vx}`);
+  assert.deepEqual(postIntegrate('targets', {}, prev, next, 0.1, 1), next, 'other modes untouched');
+  const g = p.gates[0];
+  const fast = { x: g.x, y: g.y, vx: 5, vy: 0 };
+  let r = iceStep(p, p0, 1000, fast);
+  assert.ok(r.prog.inGate && r.prog.since === 0, 'inside but moving: no rest timer');
+  const slow = { x: g.x, y: g.y, vx: 0.1, vy: 0 };
+  r = iceStep(p, r.prog, 1100, slow);
+  assert.equal(r.prog.since, 1100);
+  r = iceStep(p, r.prog, 1100 + p.restMs - 1, slow);
+  assert.equal(r.event, null);
+  r = iceStep(p, r.prog, 1100 + p.restMs, slow);
+  assert.equal(r.event, 'gate');
+  assert.equal(r.prog.next, 1);
+  // Through gate 2 without stopping: fault, same gate stays current.
+  const g1 = p.gates[1];
+  r = iceStep(p, r.prog, 2000, { x: g1.x, y: g1.y, vx: 6, vy: 0 });
+  r = iceStep(p, r.prog, 2100, { x: g1.x + p.r + 1, y: g1.y, vx: 6, vy: 0 });
+  assert.equal(r.event, 'slide');
+  assert.equal(r.prog.faults, 1);
+  assert.equal(r.prog.next, 1);
+  const last = { next: p.gates.length - 1, since: 100, inGate: true, faults: 0 };
+  const gl = p.gates[p.gates.length - 1];
+  assert.ok(iceStep(p, last, 100 + p.restMs, { x: gl.x, y: gl.y, vx: 0, vy: 0 }).won);
+  const s3 = stageSpec('ice', 3);
+  assert.ok(s3.gates > sp.gates && s3.r < sp.r && s3.slide > sp.slide);
+});
+
+test('plank: a tile fills only while still on it; moving wipes it, leaving cancels it; the full bridge wins; the shove is post-integrate drift', () => {
+  const sp = stageSpec('plank', 1);
+  const { params: p, progress: p0 } = makePlank(sp);
+  assert.equal(p.tiles.length, sp.tiles);
+  for (let i = 1; i < p.tiles.length; i++) assert.ok(p.tiles[i].x >= p.tiles[i - 1].x + p.tiles[i - 1].w - 1e-6, 'tiles run left to right');
+  const t0 = p.tiles[0];
+  const c = { x: t0.x + t0.w / 2, y: t0.y + t0.h / 2 };
+  let r = plankStep(p, p0, 1000, { ...c, vx: 0.1, vy: 0 });
+  assert.equal(r.prog.since, 1000);
+  assert.ok(Math.abs(plankFill(p, r.prog, 1000 + p.fillMs / 2) - 0.5) < 1e-6);
+  r = plankStep(p, r.prog, 1500, { ...c, vx: p.deadband + 1, vy: 0 });
+  assert.equal(r.event, 'wipe');
+  assert.equal(r.prog.since, 0);
+  r = plankStep(p, r.prog, 1600, { ...c, vx: 0, vy: 0 });
+  r = plankStep(p, r.prog, 1700, { x: 0.1, y: 0.1, vx: 0, vy: 0 });
+  assert.equal(r.event, 'cancel');
+  r = plankStep(p, r.prog, 2000, { ...c, vx: 0, vy: 0 });
+  r = plankStep(p, r.prog, 2000 + p.fillMs, { ...c, vx: 0, vy: 0 });
+  assert.equal(r.event, 'tile');
+  assert.equal(r.prog.next, 1);
+  const lastT = p.tiles[p.tiles.length - 1];
+  const w = plankStep(p, { next: p.tiles.length - 1, since: 100, wipes: 0 }, 100 + p.fillMs, { x: lastT.x + 0.1, y: lastT.y + 0.1, vx: 0, vy: 0 });
+  assert.ok(w.won);
+  const shoved = postIntegrate('plank', { ...p, shove: 0.5 }, { x: 5, y: 5, vx: 0, vy: 0 }, { x: 5, y: 5, vx: 0, vy: 0 }, 0.2, 1);
+  assert.ok(Math.abs(shoved.y - 5.1) < 1e-9, 'shove drifts the cursor');
+  const s3 = stageSpec('plank', 3);
+  assert.ok(s3.tiles > sp.tiles && s3.deadband < sp.deadband && s3.shove > 0);
+});
+
+test('seesaw: the board follows cursor x, the ball rolls downhill, a slow ball in the pocket scores, off the end is a fault and a reset', () => {
+  const sp = stageSpec('seesaw', 1);
+  const { params: p, progress: p0 } = makeSeesaw(seeded(71), sp);
+  assert.equal(p0.balls.length, sp.balls);
+  const rand = seeded(2);
+  // Cursor far right tilts the board positive; the ball rolls toward +s.
+  let r = seesawStep(p, p0, 0.1, { x: WORLD_W, y: 5 }, rand);
+  assert.ok(r.prog.angle > 0);
+  for (let i = 0; i < 20; i++) r = seesawStep(p, r.prog, 0.1, { x: WORLD_W, y: 5 }, rand);
+  assert.ok(r.prog.balls[0].s > 0 && r.prog.balls[0].v > 0, 'rolling downhill');
+  // Keep tilting: eventually it falls off the end (a fault) and resets to the centre.
+  let fell = false;
+  for (let i = 0; i < 400 && !fell; i++) {
+    r = seesawStep(p, r.prog, 0.1, { x: WORLD_W, y: 5 }, rand);
+    if (r.events.some(e => e.kind === 'fall')) fell = true;
+  }
+  assert.ok(fell, 'ball falls off');
+  assert.equal(r.prog.faults, 1);
+  assert.equal(r.prog.balls[0].s, 0);
+  // A slow ball inside the pocket scores and gets a fresh pocket on the other side.
+  const b = r.prog.balls[0];
+  const inPocket = { ...r.prog, angle: 0, balls: [{ s: b.pocket, v: 0.1, pocket: b.pocket }] };
+  const sc = seesawStep(p, inPocket, 0.05, { x: WORLD_W / 2, y: 5 }, rand);
+  assert.ok(sc.events.some(e => e.kind === 'pocket'));
+  assert.equal(sc.prog.pockets, 1);
+  assert.ok(Math.sign(sc.prog.balls[0].pocket) !== Math.sign(b.pocket));
+  const fastThrough = seesawStep(p, { ...inPocket, balls: [{ s: b.pocket, v: 3, pocket: b.pocket }] }, 0.05, { x: WORLD_W / 2, y: 5 }, rand);
+  assert.equal(fastThrough.prog.pockets, 0, 'too fast does not count');
+  const win = seesawStep(p, { ...inPocket, pockets: p.target - 1 }, 0.05, { x: WORLD_W / 2, y: 5 }, rand);
+  assert.ok(win.won);
+  const s3 = stageSpec('seesaw', 3);
+  assert.ok(s3.mass > sp.mass && s3.pocketW < sp.pocketW && s3.balls > sp.balls);
+});
+
+test('belts: a belt cell drags the cursor after integrate, hazards rewind to the last checkpoint and count a fault, the exit wins', () => {
+  const sp = stageSpec('belts', 1);
+  const { params: p, progress: p0 } = makeBelts(seeded(81), sp);
+  assert.equal(p.tiles.length, p.cols * p.rows);
+  assert.equal(beltCell(p, p.start.x, p.start.y), 'S');
+  assert.ok([...p.tiles].filter(c => c === 'E').length >= 1);
+  assert.ok([...p.tiles].filter(c => c === 'C').length >= 1, 'there is a checkpoint');
+  const beltCols = new Set<number>();
+  for (let i = 0; i < p.tiles.length; i++) if ('^v<>'.includes(p.tiles[i])) beltCols.add(i % p.cols);
+  assert.equal(beltCols.size, sp.beltCols);
+  // Drift on a belt.
+  const bc = [...beltCols][0];
+  const onBelt = { x: bc + 0.5, y: 4.5, vx: 0, vy: 0 };
+  const d = beltDir(p, onBelt.x, onBelt.y, 1)!;
+  assert.ok(d && Math.abs(d.y) === 1);
+  const moved = postIntegrate('belts', p, onBelt, onBelt, 0.5, 1);
+  assert.ok(Math.abs(moved.y - (onBelt.y + d.y * p.speed * 0.5)) < 1e-9, 'belt drags by speed*dt');
+  assert.deepEqual(postIntegrate('belts', p, { x: 0.5, y: 4.5, vx: 0, vy: 0 }, { x: 0.5, y: 4.5, vx: 0, vy: 0 }, 0.5, 1), { x: 0.5, y: 4.5, vx: 0, vy: 0 }, 'floor does not drag');
+  // Reverse timer flips the direction.
+  const rev = { ...p, reverseS: 5 };
+  const flipped = beltDir(rev, onBelt.x, onBelt.y, 6)!;
+  assert.ok(flipped.x === -d.x && flipped.y === -d.y, 'reversed direction');
+  assert.ok(beltsReversed(rev, 6) && !beltsReversed(rev, 2));
+  // Hazard: rewind + fault; frozen briefly at the checkpoint.
+  const hz = p.tiles.indexOf('X');
+  const hazard = { x: (hz % p.cols) + 0.5, y: Math.floor(hz / p.cols) + 0.5, vx: 1, vy: 1 };
+  let r = beltsStep(p, p0, 1000, hazard);
+  assert.equal(r.event, 'hazard');
+  assert.equal(r.prog.faults, 1);
+  assert.deepEqual({ x: r.body.x, y: r.body.y }, p0.checkpoint);
+  assert.equal(beltsStep(p, r.prog, 1100, hazard).body.x, p0.checkpoint.x, 'still frozen at the checkpoint');
+  // Checkpoint moves the respawn point.
+  const ci = p.tiles.indexOf('C');
+  const cp = { x: (ci % p.cols) + 0.5, y: Math.floor(ci / p.cols) + 0.5, vx: 0, vy: 0 };
+  r = beltsStep(p, p0, 1000, cp);
+  assert.equal(r.event, 'checkpoint');
+  assert.deepEqual(r.prog.checkpoint, { x: cp.x, y: cp.y });
+  const ei = p.tiles.indexOf('E');
+  assert.ok(beltsStep(p, p0, 1000, { x: (ei % p.cols) + 0.5, y: Math.floor(ei / p.cols) + 0.5, vx: 0, vy: 0 }).won);
+  const s3 = stageSpec('belts', 3);
+  assert.ok(s3.beltCols > sp.beltCols && s3.speed > sp.speed && s3.reverseS > 0);
+});
+
+test('needle: the gap rides a public sine; through the gap passes the wall, touching the wall rewinds and counts a fault', () => {
+  const sp = stageSpec('needle', 1);
+  const { params: p, progress: p0 } = makeNeedle(seeded(91), sp);
+  assert.equal(p.walls.length, sp.walls);
+  for (let i = 1; i < p.walls.length; i++) assert.ok(p.walls[i].x > p.walls[i - 1].x + 1, 'walls are spaced out');
+  const w0 = p.walls[0];
+  const t = 1.3;
+  const gy = needleGapY(p, 0, t);
+  assert.ok(gy - p.gapH / 2 >= NEEDLE_TOP && gy + p.gapH / 2 <= WORLD_H, 'gap stays on the field');
+  // Through the gap: past the wall = pass.
+  let r = needleStep(p, p0, 1000, t, { x: w0.x, y: gy, vx: 3, vy: 0 });
+  assert.equal(r.event, null, 'inside the gap plane: no fault');
+  r = needleStep(p, r.prog, 1066, t, { x: w0.x + 0.6, y: gy, vx: 3, vy: 0 });
+  assert.equal(r.event, 'pass');
+  assert.equal(r.prog.next, 1);
+  // Into the wall: fault, rewind to just before it, frozen briefly.
+  const w1 = p.walls[1];
+  const gy1 = needleGapY(p, 1, t);
+  const offGap = gy1 + p.gapH / 2 + 0.6 <= WORLD_H - 0.3 ? gy1 + p.gapH / 2 + 0.6 : gy1 - p.gapH / 2 - 0.6;
+  r = needleStep(p, r.prog, 2000, t, { x: w1.x, y: offGap, vx: 3, vy: 0 });
+  assert.equal(r.event, 'wall');
+  assert.equal(r.prog.faults, 1);
+  assert.ok(r.body.x < w1.x && r.body.vx === 0);
+  assert.equal(r.prog.next, 1, 'same wall again');
+  assert.ok(needleStep(p, r.prog, 2100, t, { x: w1.x + 1, y: gy1, vx: 0, vy: 0 }).body.x < w1.x, 'frozen: held before the wall');
+  const last = { next: p.walls.length - 1, faults: 0, frozenUntil: 0 };
+  const wl = p.walls[p.walls.length - 1];
+  assert.ok(needleStep(p, last, 3000, t, { x: wl.x + 1, y: needleGapY(p, p.walls.length - 1, t), vx: 1, vy: 0 }).won);
+  const s3 = stageSpec('needle', 3);
+  assert.ok(s3.walls > sp.walls && s3.gapH < sp.gapH && s3.periodS < sp.periodS);
+});
+
+test('wires: the order is secret (public progress only names the next color), the right node advances, a wrong node is a strike', () => {
+  const sp = stageSpec('wires', 1);
+  const { params: p, progress: p0, secret } = makeWires(seeded(101), sp);
+  assert.equal(p.nodes.length, sp.order + sp.decoys);
+  assert.equal(secret.order.length, sp.order);
+  assert.equal(new Set(p.nodes.map(n => n.color)).size, p.nodes.length, 'distinct colors');
+  assert.ok(!('order' in p) && !('order' in p0), 'the order is not public');
+  assert.equal(JSON.stringify(p0).includes('"order"'), false);
+  assert.equal(p0.nextColor, p.nodes[secret.order[0]].color, 'only the next color is public');
+  for (let i = 0; i < p.nodes.length; i++) for (let j = i + 1; j < p.nodes.length; j++) assert.ok(dist(p.nodes[i], p.nodes[j]) > 2 * p.r, 'nodes do not overlap');
+  const right = p.nodes[secret.order[0]];
+  const wrongIdx = secret.order[1];
+  let r = wiresStep(p, p0, secret, 1000, right);
+  assert.equal(r.prog.since, 1000);
+  r = wiresStep(p, r.prog, secret, 1000 + p.dwellMs - 1, right);
+  assert.equal(r.event, null);
+  r = wiresStep(p, r.prog, secret, 1000 + p.dwellMs, right);
+  assert.equal(r.event, 'wire');
+  assert.equal(r.prog.pos, 1);
+  assert.deepEqual(r.prog.done, [secret.order[0]]);
+  assert.equal(r.prog.nextColor, p.nodes[secret.order[1]].color);
+  // Wrong node (the third in the order, not asked for yet): strike after settling on it.
+  const w3 = p.nodes[secret.order[2] ?? wrongIdx];
+  const far = { x: 0.1, y: 0.1 };
+  r = wiresStep(p, r.prog, secret, 2000, far);
+  if (secret.order.length > 2) {
+    r = wiresStep(p, r.prog, secret, 2100, w3);
+    assert.equal(r.prog.wrongSince, 2100);
+    r = wiresStep(p, r.prog, secret, 2100 + WRONG_MS, w3);
+    assert.equal(r.event, 'strike');
+    assert.equal(r.prog.strikes, 1);
+    assert.equal(wiresStep(p, r.prog, secret, 5000, w3).prog, r.prog, 'staying does not stack strikes');
+  }
+  // Done nodes are harmless.
+  r = wiresStep(p, r.prog, secret, 6000, far);
+  assert.equal(wiresStep(p, r.prog, secret, 6100, right).prog.wrongSince, 0);
+  // Finishing wins.
+  const lastIdx = secret.order[secret.order.length - 1];
+  const almost = { ...p0, pos: secret.order.length - 1, onNode: lastIdx, since: 100, done: secret.order.slice(0, -1) };
+  const w = wiresStep(p, almost, secret, 100 + p.dwellMs, p.nodes[lastIdx]);
+  assert.ok(w.won);
+  assert.equal(w.prog.nextColor, -1);
+  const s3 = stageSpec('wires', 3);
+  assert.ok(s3.order > sp.order && s3.dwellMs < sp.dwellMs && s3.decoys > sp.decoys);
+});
+
+test('picker sampling: PICK_CARDS cards, never the game that just finished, laid out as given; a gap keeps the same cards; another picker can differ', () => {
+  const cards = pickCards(seeded(5), 'maze');
+  assert.equal(cards.length, PICK_CARDS);
+  assert.equal(new Set(cards).size, PICK_CARDS, 'no duplicates');
+  assert.ok(!cards.includes('maze'));
+  assert.ok(cards.every(k => LEVEL_ROTATION.includes(k)));
+  assert.ok(pickCards(seeded(5), undefined).length === PICK_CARDS);
+  const layout = voteLayout(cards);
+  assert.deepEqual(
+    layout.map(c => c.kind),
+    [...cards]
+  );
+  // A gap at the deadline: same cards, timer restarted.
+  const prog = { endsAt: 10_000, restarts: 0 };
+  const r = voteResolve({ cards: layout }, prog, VOTE_START.x, VOTE_START.y, 10_000);
+  assert.ok(!('chosen' in r));
+  if (!('chosen' in r)) assert.equal(r.prog.endsAt, 10_000 + VOTE_SECS * 1000);
+  // Different draws differ (and over many draws every game shows up).
+  const seen = new Set<string>();
+  let differs = false;
+  for (let s = 0; s < 60; s++) {
+    const c = pickCards(seeded(100 + s), 'maze');
+    c.forEach(k => seen.add(k));
+    if (c.join() !== cards.join()) differs = true;
+  }
+  assert.ok(differs);
+  assert.equal(seen.size, LEVEL_ROTATION.length - 1, 'every other game can come up');
+});
+
+test('stations: the numbers show for revealMs after play starts, then the crowd goes from memory; fewer stops by default', () => {
+  const sp = stageSpec('stations', 1);
+  const { params: p } = makeStations(seeded(14), sp);
+  assert.equal(p.revealMs, sp.revealS * 1000);
+  assert.ok(sp.revealS >= 3 && sp.stations <= 6);
+  assert.ok(stationsRevealed(p, 0) && stationsRevealed(p, sp.revealS - 0.01));
+  assert.ok(!stationsRevealed(p, sp.revealS) && !stationsRevealed(p, 60));
+  assert.ok(stageSpec('stations', 3).revealS < sp.revealS, 'less time to memorize later');
 });

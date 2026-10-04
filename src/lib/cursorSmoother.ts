@@ -1,4 +1,4 @@
-import { integrate, WORLD_H, WORLD_W, type Body } from '../../spacetimedb/src/sim';
+import { integrate, postIntegrate, WORLD_H, WORLD_W, type Body } from '../../spacetimedb/src/sim';
 import { serverNowMs } from './clock';
 
 type CursorRow = Body & {
@@ -7,7 +7,14 @@ type CursorRow = Body & {
   active: number;
   lastTickAt: { microsSinceUnixEpoch: bigint };
 };
-type Physics = { gain: number; damping: number; maxSpeed: number; tickHz: number };
+type Physics = {
+  gain: number;
+  damping: number;
+  maxSpeed: number;
+  tickHz: number;
+  /** Running level, so prediction applies the same post-integrate drift (ice slide, belts, plank shove) as the tick. */
+  level?: { kind: string; params: unknown; playAt: number } | null;
+};
 
 /** Larger jumps than this (maze respawn) snap instead of easing. */
 const TELEPORT = 3;
@@ -32,10 +39,16 @@ function predict(snap: CursorRow, nowUs: number, phys: Physics, held: boolean): 
   // Step exactly like the server (whole ticks) so the next snapshot matches the
   // prediction, and interpolate linearly inside the current tick.
   let b: Body = { x: snap.x, y: snap.y, vx: snap.vx, vy: snap.vy };
+  const lv = phys.level;
+  const tSec = lv ? (nowUs / 1000 - lv.playAt) / 1000 : -1;
+  const step = (from: Body) => {
+    const nb = integrate(from, target, tick, phys.gain, phys.damping, phys.maxSpeed);
+    return lv && tSec >= 0 ? postIntegrate(lv.kind, lv.params, from, nb, tick, tSec) : nb;
+  };
   let left = age;
-  for (; left >= tick; left -= tick) b = integrate(b, target, tick, phys.gain, phys.damping, phys.maxSpeed);
+  for (; left >= tick; left -= tick) b = step(b);
   if (left > 0) {
-    const nb = integrate(b, target, tick, phys.gain, phys.damping, phys.maxSpeed);
+    const nb = step(b);
     const f = left / tick;
     b = { x: b.x + (nb.x - b.x) * f, y: b.y + (nb.y - b.y) * f, vx: nb.vx, vy: nb.vy };
   }

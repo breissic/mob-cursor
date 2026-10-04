@@ -35,7 +35,7 @@ export function countdownBeep(final: boolean) {
   tone(final ? 1046 : 523, final ? 0.35 : 0.12, 'square', 0.09);
 }
 
-export function sfx(kind: string) {
+export function sfx(kind: string, who?: string) {
   switch (kind) {
     case 'vote': {
       const n = performance.now();
@@ -44,6 +44,52 @@ export function sfx(kind: string) {
       tone(600 + Math.random() * 300, 0.05, 'triangle', 0.03);
       return;
     }
+    case 'echo_flash': {
+      // One note per pad so the sequence is hummable.
+      const pad = Number(who ?? 0) || 0;
+      return tone([392, 494, 587, 698, 784, 880, 988, 1175][pad % 8], 0.3, 'triangle', 0.09);
+    }
+    case 'echo_pad': {
+      const pad = Number(who ?? 0) || 0;
+      return tone([392, 494, 587, 698, 784, 880, 988, 1175][pad % 8], 0.18, 'triangle', 0.08);
+    }
+    case 'echo_go':
+      return tone(660, 0.12, 'square', 0.08, 990);
+    case 'echo_round':
+    case 'valve_all_in':
+      [659, 784, 988].forEach((f, i) => setTimeout(() => tone(f, 0.15, 'square', 0.08), i * 80));
+      return;
+    case 'echo_fault':
+    case 'wires_strike':
+    case 'seesaw_fall':
+      return tone(160, 0.35, 'sawtooth', 0.12, 70);
+    case 'crane_drop':
+      return tone(220, 0.12, 'square', 0.1, 120);
+    case 'crane_miss':
+      return tone(330, 0.2, 'triangle', 0.08, 200);
+    case 'crane_topple':
+    case 'belts_hazard':
+      tone(80, 0.6, 'sawtooth', 0.15, 30);
+      return tone(1400, 0.2, 'triangle', 0.05, 200);
+    case 'spot_out':
+      return tone(400, 0.15, 'sawtooth', 0.09, 200);
+    case 'spot_in':
+    case 'plank_cancel':
+      return tone(500, 0.08, 'triangle', 0.06, 700);
+    case 'sheep_in':
+      tone(440, 0.12, 'triangle', 0.08, 520);
+      return setTimeout(() => tone(520, 0.2, 'triangle', 0.08, 440), 120);
+    case 'sheep_escape':
+    case 'ice_slide':
+    case 'plank_wipe':
+    case 'needle_wall':
+      return tone(300, 0.2, 'triangle', 0.07, 180);
+    case 'ice_gate':
+    case 'plank_tile':
+    case 'needle_pass':
+    case 'belts_checkpoint':
+    case 'wires_wire':
+    case 'seesaw_pocket':
     case 'hunt_found':
     case 'station':
       tone(880, 0.1, 'square', 0.08);
@@ -57,9 +103,6 @@ export function sfx(kind: string) {
     case 'valve_blow':
       tone(90, 0.5, 'sawtooth', 0.14, 30);
       return tone(1800, 0.3, 'triangle', 0.05, 200);
-    case 'valve_all_in':
-      [659, 784, 988].forEach((f, i) => setTimeout(() => tone(f, 0.15, 'square', 0.08), i * 80));
-      return;
     case 'target':
       tone(660, 0.1, 'square', 0.08);
       return setTimeout(() => tone(990, 0.15, 'square', 0.08), 90);

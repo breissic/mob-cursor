@@ -18,6 +18,7 @@ import AdminStartStageReducer from "../admin_start_stage_reducer";
 import AdminStopLevelReducer from "../admin_stop_level_reducer";
 import CreateRoomReducer from "../create_room_reducer";
 import JoinReducer from "../join_reducer";
+import LeaveReducer from "../leave_reducer";
 import PostCommentaryReducer from "../post_commentary_reducer";
 import SetPointerReducer from "../set_pointer_reducer";
 
@@ -33,6 +34,7 @@ export type AdminStartStageParams = __Infer<typeof AdminStartStageReducer>;
 export type AdminStopLevelParams = __Infer<typeof AdminStopLevelReducer>;
 export type CreateRoomParams = __Infer<typeof CreateRoomReducer>;
 export type JoinParams = __Infer<typeof JoinReducer>;
+export type LeaveParams = __Infer<typeof LeaveReducer>;
 export type PostCommentaryParams = __Infer<typeof PostCommentaryReducer>;
 export type SetPointerParams = __Infer<typeof SetPointerReducer>;
 

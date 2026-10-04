@@ -42,6 +42,44 @@ import {
   type VoteParams,
   type VoteProgress,
   voteHover,
+  echoLit,
+  craneMarkerX,
+  craneHeight,
+  spotPos,
+  spotS,
+  spotHp,
+  decoyPos,
+  sheepAt,
+  plankFill,
+  seesawPoint,
+  SEESAW_BALL_R,
+  beltDir,
+  beltsReversed,
+  needleGapY,
+  NEEDLE_TOP,
+  WIRE_COLORS,
+  WIRE_NAMES,
+  stationsRevealed,
+  type EchoParams,
+  type EchoProgress,
+  type CraneParams,
+  type CraneProgress,
+  type SpotlightParams,
+  type SpotlightProgress,
+  type SheepParams,
+  type SheepProgress,
+  type IceParams,
+  type IceProgress,
+  type PlankParams,
+  type PlankProgress,
+  type SeesawParams,
+  type SeesawProgress,
+  type BeltsParams,
+  type BeltsProgress,
+  type NeedleParams,
+  type NeedleProgress,
+  type WiresParams,
+  type WiresProgress,
 } from '../../spacetimedb/src/sim';
 import { blit } from './sprites';
 
@@ -60,7 +98,17 @@ export const GAME_META: Record<string, { exe: string; title: string; color: stri
   keyboard: { exe: 'KEYBOARD.EXE', title: 'Giant Keyboard', color: '#5c7cfa', goal: 'Type the phrase: hold the cursor on each letter in order. Wrong key = a typo; too many and you are out.' },
   hunt: { exe: 'HUNT.EXE', title: 'Warmer, Colder', color: '#e8590c', goal: 'Something is hidden. The meter only says warmer or colder. Find it and HOLD STILL on it. Decoys feel WARM but never BOIL: sit on one and the trap springs.' },
   valves: { exe: 'VALVES.EXE', title: 'Pressure Room', color: '#0ca678', goal: 'Every gauge must sit in the green at once. Holding a valve fills it; the others leak. Keep them all green for the hold.' },
-  stations: { exe: 'STATIONS.EXE', title: 'Grand Tour', color: '#7048e8', goal: 'Visit the numbered stops in order and wait at each one. Leave early = a strike; too many and the tour is over.' },
+  stations: { exe: 'STATIONS.EXE', title: 'Grand Tour', color: '#7048e8', goal: 'Memorize the numbered stops — the numbers vanish after a few seconds. Visit them in order and wait at each. Leave early = a strike.' },
+  echo: { exe: 'ECHO.EXE', title: 'Echo', color: '#4dabf7', goal: 'Watch the pads light up, then park on them in the same order. Wrong pad or leaving early = a fault and the round restarts.' },
+  crane: { exe: 'CRANE.EXE', title: 'Tower Crane', color: '#ff922b', goal: 'The block swings. Hold the lever to drop it when it is over the stack. Off-centre drops shrink the block; miss the stack and it topples.' },
+  spotlight: { exe: 'SPOTLIGHT.EXE', title: 'Spotlight', color: '#ffe680', goal: 'Stay inside the walking light. Every second outside drains health. Reach the end of the path alive.' },
+  sheep: { exe: 'SHEEP.EXE', title: 'Sheep Dog', color: '#f3f0ff', goal: 'Get near a sheep to nudge it toward the pen. Pen them all and keep them in for the hold. Escapes count against you.' },
+  ice: { exe: 'ICE.EXE', title: 'Ice Rink', color: '#a5d8ff', goal: 'The cursor slides. Come to a dead stop inside each gate in order. Sliding through = a fault.' },
+  plank: { exe: 'PLANK.EXE', title: 'Plank Walk', color: '#d9a35c', goal: 'Hold perfectly still on each bridge tile to set it. Moving wipes the tile. Build the whole bridge.' },
+  seesaw: { exe: 'SEESAW.EXE', title: 'Seesaw', color: '#8b5a2b', goal: 'Cursor left/right tilts the board. Roll the ball into the pocket slowly. Off the end = a fault.' },
+  belts: { exe: 'BELTS.EXE', title: 'Conveyor Belts', color: '#4a4e69', goal: 'Belts drag the cursor. Reach the EXIT. Hazards zap you back to the last checkpoint and count a fault.' },
+  needle: { exe: 'NEEDLE.EXE', title: 'Thread the Needle', color: '#ff5a36', goal: 'Each wall has one moving gap. Slip through every gap. Touching a wall sends you back and counts a fault.' },
+  wires: { exe: 'WIRES.EXE', title: 'Secret Wires', color: '#ffd43b', goal: 'Only the NEXT color is shown. Hold on that node to connect it. Any other node = a strike.' },
   vote: { exe: 'PICK.EXE', title: 'Pick the next game', color: '#ff4fa3', goal: 'Park the cursor INSIDE a card. It is EXTRA strong right now. Time out = that game!' },
   lobby: { exe: 'LOBBY.EXE', title: 'Lobby', color: '#ffd23f', goal: 'Scan the QR code to join.' },
 };
@@ -117,6 +165,16 @@ const FIELD_COLOR: Record<string, string> = {
   hunt: '#1d2a1f',
   valves: '#2f3640',
   stations: '#e9ecef',
+  echo: '#1a1b26',
+  crane: '#87c5ff',
+  spotlight: '#101418',
+  sheep: '#5c9e3c',
+  ice: '#bfe6ff',
+  plank: '#2f5d8a',
+  seesaw: '#f0d9b5',
+  belts: '#2b2d42',
+  needle: '#1e2a38',
+  wires: '#23272e',
 };
 
 /** Color behind the playfield (also fills the letterbox bars). */
@@ -247,6 +305,12 @@ export function drawField(g: CanvasRenderingContext2D, kind: string, px: number)
     g.fillRect(0, 0, WORLD_W, WORLD_H);
     g.fillStyle = '#c9c3b4';
     g.fillRect(0, 0, WORLD_W, 2.0);
+  } else if (FIELD_COLOR[kind]) {
+    g.fillStyle = FIELD_COLOR[kind];
+    g.fillRect(0, 0, WORLD_W, WORLD_H);
+    if (kind === 'ice') checker(g, 'rgba(255,255,255,0.25)', 'rgba(255,255,255,0.05)', 1);
+    else if (kind === 'belts') checker(g, 'rgba(255,255,255,0.05)', 'rgba(0,0,0,0.05)', 1);
+    else dots(g, kind === 'crane' || kind === 'seesaw' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)');
   } else {
     // Lobby: dotted desk.
     g.fillStyle = '#0e6f6b';
@@ -276,7 +340,17 @@ export function drawLevel(
   else if (lv.kind === 'keyboard') drawKeyboard(g, lv.params as KeyboardParams, lv.progress as KeyboardProgress, px, serverMs, detail);
   else if (lv.kind === 'hunt') drawHunt(g, lv.params as HuntParams, lv.progress as HuntProgress, px, serverMs, cursor, detail);
   else if (lv.kind === 'valves') drawValves(g, lv.params as ValvesParams, lv.progress as ValvesProgress, px, serverMs, cursor, detail);
-  else if (lv.kind === 'stations') drawStations(g, lv.params as StationsParams, lv.progress as StationsProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'stations') drawStations(g, lv.params as StationsParams, lv.progress as StationsProgress, px, serverMs, Math.max(0, t), cursor, detail);
+  else if (lv.kind === 'echo') drawEcho(g, lv.params as EchoParams, lv.progress as EchoProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'crane') drawCrane(g, lv.params as CraneParams, lv.progress as CraneProgress, px, serverMs, Math.max(0, t), cursor, detail);
+  else if (lv.kind === 'spotlight') drawSpotlight(g, lv.params as SpotlightParams, lv.progress as SpotlightProgress, px, serverMs, Math.max(0, t), cursor, detail);
+  else if (lv.kind === 'sheep') drawSheep(g, lv.params as SheepParams, lv.progress as SheepProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'ice') drawIce(g, lv.params as IceParams, lv.progress as IceProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'plank') drawPlank(g, lv.params as PlankParams, lv.progress as PlankProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'seesaw') drawSeesaw(g, lv.params as SeesawParams, lv.progress as SeesawProgress, px, serverMs, cursor, detail);
+  else if (lv.kind === 'belts') drawBelts(g, lv.params as BeltsParams, lv.progress as BeltsProgress, px, serverMs, Math.max(0, t), cursor, detail);
+  else if (lv.kind === 'needle') drawNeedle(g, lv.params as NeedleParams, lv.progress as NeedleProgress, px, serverMs, Math.max(0, t), cursor, detail);
+  else if (lv.kind === 'wires') drawWires(g, lv.params as WiresParams, lv.progress as WiresProgress, px, serverMs, cursor, detail);
 }
 
 /** Horizontal countdown bar: `frac` 1 = full. */
@@ -741,7 +815,127 @@ function cardIcon(g: CanvasRenderingContext2D, kind: string, cx: number, cy: num
     case 'valves':
       return gauge(g, cx, cy, s * 0.5, s * 1.4, 0.35 + 0.3 * (0.5 + 0.5 * Math.sin(ms / 400)), [0.35, 0.65], px);
     case 'stations':
-      return stationShape(g, cx, cy, s * 0.7, '3', '#7048e8', px, true);
+      return stationShape(g, cx, cy, s * 0.7, '?', '#7048e8', px, true);
+    case 'echo': {
+      const lit = Math.floor(ms / 350) % 4;
+      [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].forEach(([dx, dy], i) => {
+        g.fillStyle = i === lit ? ECHO_COLORS[i] : '#2c2f3a';
+        g.beginPath();
+        g.arc(cx + dx * s * 0.8, cy + dy * s * 0.8, s * 0.32, 0, Math.PI * 2);
+        g.fill();
+        g.lineWidth = 3 * px;
+        g.strokeStyle = ECHO_COLORS[i];
+        g.stroke();
+      });
+      return;
+    }
+    case 'crane': {
+      const sw = Math.sin(ms / 500) * s * 0.5;
+      g.strokeStyle = '#ddd';
+      g.lineWidth = 3 * px;
+      g.beginPath();
+      g.moveTo(cx, cy - s);
+      g.lineTo(cx + sw, cy - s * 0.3);
+      g.stroke();
+      g.fillStyle = '#ff922b';
+      g.fillRect(cx + sw - s * 0.35, cy - s * 0.3, s * 0.7, s * 0.4);
+      g.fillStyle = '#4dabf7';
+      g.fillRect(cx - s * 0.4, cy + s * 0.3, s * 0.8, s * 0.4);
+      g.fillStyle = '#69db7c';
+      g.fillRect(cx - s * 0.45, cy + s * 0.7, s * 0.9, s * 0.4);
+      g.strokeStyle = '#111';
+      g.strokeRect(cx + sw - s * 0.35, cy - s * 0.3, s * 0.7, s * 0.4);
+      g.strokeRect(cx - s * 0.4, cy + s * 0.3, s * 0.8, s * 0.4);
+      g.strokeRect(cx - s * 0.45, cy + s * 0.7, s * 0.9, s * 0.4);
+      return;
+    }
+    case 'spotlight': {
+      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, s);
+      grad.addColorStop(0, 'rgba(255,245,200,0.95)');
+      grad.addColorStop(1, 'rgba(255,230,150,0)');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(cx, cy, s, 0, Math.PI * 2);
+      g.fill();
+      return drawCursorSprite(g, cx - s * 0.2, cy - s * 0.3, s * 0.8, '#fff');
+    }
+    case 'sheep':
+      return sheepShape(g, cx, cy, 1, px, false, ms);
+    case 'ice':
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      g.beginPath();
+      g.arc(cx, cy, s * 0.8, 0, Math.PI * 2);
+      g.fill();
+      g.lineWidth = 4 * px;
+      g.strokeStyle = '#ffd23f';
+      g.stroke();
+      return worldText(g, '1', cx, cy + 0.05, s * 0.8, { font: FONT_PIXEL, fill: '#fff', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+    case 'plank':
+      for (let i = 0; i < 3; i++) {
+        g.fillStyle = i < 2 ? '#b07a3a' : 'rgba(255,255,255,0.15)';
+        g.fillRect(cx - s * 1.1 + i * s * 0.75, cy - s * 0.3, s * 0.65, s * 0.6);
+        g.lineWidth = 3 * px;
+        g.strokeStyle = i < 2 ? '#5a3a16' : '#ffd23f';
+        g.strokeRect(cx - s * 1.1 + i * s * 0.75, cy - s * 0.3, s * 0.65, s * 0.6);
+      }
+      return;
+    case 'seesaw': {
+      const a = Math.sin(ms / 600) * 0.3;
+      g.fillStyle = '#555';
+      g.beginPath();
+      g.moveTo(cx - s * 0.3, cy + s * 0.7);
+      g.lineTo(cx + s * 0.3, cy + s * 0.7);
+      g.lineTo(cx, cy + s * 0.1);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = '#8b5a2b';
+      g.lineWidth = 8 * px;
+      g.beginPath();
+      g.moveTo(cx - Math.cos(a) * s, cy + s * 0.1 - Math.sin(a) * s);
+      g.lineTo(cx + Math.cos(a) * s, cy + s * 0.1 + Math.sin(a) * s);
+      g.stroke();
+      g.fillStyle = '#ff4d6d';
+      g.beginPath();
+      g.arc(cx - Math.cos(a) * s * 0.4, cy + s * 0.1 - Math.sin(a) * s * 0.4 - s * 0.25, s * 0.22, 0, Math.PI * 2);
+      g.fill();
+      return;
+    }
+    case 'belts':
+      g.fillStyle = '#4a4e69';
+      g.fillRect(cx - s, cy - s * 0.4, s * 2, s * 0.8);
+      g.strokeStyle = '#fff';
+      g.lineWidth = 3 * px;
+      for (let k = 0; k < 3; k++) {
+        const f = ((ms / 500 + k / 3) % 1) * 2 - 1;
+        g.beginPath();
+        g.moveTo(cx + f * s * 0.8 - s * 0.15, cy - s * 0.25);
+        g.lineTo(cx + f * s * 0.8 + s * 0.1, cy);
+        g.lineTo(cx + f * s * 0.8 - s * 0.15, cy + s * 0.25);
+        g.stroke();
+      }
+      return;
+    case 'needle': {
+      const gy = cy + Math.sin(ms / 500) * s * 0.4;
+      g.fillStyle = '#ff5a36';
+      g.fillRect(cx - s * 0.15, cy - s, s * 0.3, gy - s * 0.3 - (cy - s));
+      g.fillRect(cx - s * 0.15, gy + s * 0.3, s * 0.3, cy + s - gy - s * 0.3);
+      g.strokeStyle = '#111';
+      g.lineWidth = 2 * px;
+      g.strokeRect(cx - s * 0.15, cy - s, s * 0.3, gy - s * 0.3 - (cy - s));
+      g.strokeRect(cx - s * 0.15, gy + s * 0.3, s * 0.3, cy + s - gy - s * 0.3);
+      return;
+    }
+    case 'wires':
+      [0, 1, 2].forEach(i => {
+        g.fillStyle = WIRE_COLORS[i];
+        g.beginPath();
+        g.arc(cx - s * 0.8 + i * s * 0.8, cy + (i === 1 ? -s * 0.4 : s * 0.3), s * 0.32, 0, Math.PI * 2);
+        g.fill();
+        g.lineWidth = 3 * px;
+        g.strokeStyle = '#111';
+        g.stroke();
+      });
+      return;
   }
 }
 
@@ -1414,14 +1608,16 @@ function drawValves(g: CanvasRenderingContext2D, p: ValvesParams, prog: ValvesPr
   }
 }
 
-function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: StationsProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: StationsProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
   const n = p.stations.length;
+  // Memory game: the numbers (and the "next" highlight) only show for the reveal window.
+  const revealed = stationsRevealed(p, t);
   // Dotted route through the visited stations and on to the next one.
   g.save();
   g.setLineDash([0.18, 0.14]);
   g.lineDashOffset = -ms / 300;
   g.lineWidth = 4 * px;
-  for (let i = 1; i <= Math.min(prog.next, n - 1); i++) {
+  for (let i = 1; i <= Math.min(revealed ? prog.next : prog.next - 1, n - 1); i++) {
     const a = p.stations[i - 1];
     const b = p.stations[i];
     g.strokeStyle = i < prog.next ? 'rgba(105,219,124,0.8)' : 'rgba(112,72,232,0.6)';
@@ -1433,10 +1629,10 @@ function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: Stat
   g.restore();
   for (let i = 0; i < n; i++) {
     const s = p.stations[i];
-    const next = i === prog.next;
+    const next = revealed && i === prog.next;
     const done = i < prog.next;
-    stationShape(g, s.x, s.y, p.r, String(i + 1), '#7048e8', px, next, done);
-    if (next && prog.since > 0) {
+    stationShape(g, s.x, s.y, p.r, revealed ? String(i + 1) : '?', '#7048e8', px, next, done);
+    if (i === prog.next && prog.since > 0) {
       const frac = clamp((ms - prog.since) / (p.dwellS * 1000), 0, 1);
       dwellRing(g, s.x, s.y, p.r + 0.25, frac, '#ffd23f', px);
       sticker(g, s.x, s.y - p.r - 0.45, `STAY ${Math.ceil(p.dwellS - frac * p.dwellS)}`, 0.3, '#ffd23f', '#111', px);
@@ -1452,11 +1648,15 @@ function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: Stat
       g.restore();
     }
   }
-  // Arrow from the cursor to the next station when it is far away.
+  if (revealed) {
+    const left = Math.ceil((p.revealMs - t * 1000) / 1000);
+    headline(g, `MEMORIZE! NUMBERS HIDE IN ${left}`, WORLD_W / 2, 1.2, 0.6, '#ff5a36', px);
+  } else if (detail) headline(g, `FIND STOP ${Math.min(prog.next + 1, n)} FROM MEMORY`, WORLD_W / 2, 1.2, 0.55, '#7048e8', px);
+  // Arrow from the cursor to the next station when it is far away (only while the numbers show).
   const tgt = p.stations[prog.next];
   if (tgt && detail) {
     const d = Math.hypot(tgt.x - cursor.x, tgt.y - cursor.y);
-    if (d > p.r + 1.2) {
+    if (revealed && d > p.r + 1.2) {
       const a = Math.atan2(tgt.y - cursor.y, tgt.x - cursor.x);
       const ax = cursor.x + Math.cos(a) * 1.0;
       const ay = cursor.y + Math.sin(a) * 1.0;
@@ -1477,6 +1677,533 @@ function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: Stat
       sticker(g, 1.6, 0.6, `LEFT EARLY ${prog.cancels}/${p.skipCap}`, 0.28, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
     }
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Echo
+// ---------------------------------------------------------------------------
+
+const ECHO_COLORS = ['#ff4d6d', '#4dabf7', '#ffd43b', '#69db7c', '#da77f2', '#ff922b', '#3bc9db', '#f783ac'];
+
+function drawEcho(g: CanvasRenderingContext2D, p: EchoParams, prog: EchoProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  const lit = echoLit(p, prog, ms);
+  p.pads.forEach((pad, i) => {
+    const on = i === lit || (prog.phase === 'retrace' && i === prog.onPad && prog.since > 0);
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.beginPath();
+    g.arc(pad.x + 0.1, pad.y + 0.12, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = on ? ECHO_COLORS[i % ECHO_COLORS.length] : '#2c2f3a';
+    g.beginPath();
+    g.arc(pad.x, pad.y, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.lineWidth = 5 * px;
+    g.strokeStyle = on ? '#fff' : ECHO_COLORS[i % ECHO_COLORS.length];
+    g.stroke();
+    if (on) {
+      g.strokeStyle = 'rgba(255,255,255,0.5)';
+      g.lineWidth = 3 * px;
+      g.beginPath();
+      g.arc(pad.x, pad.y, p.r + 0.25 + 0.08 * Math.sin(ms / 90), 0, Math.PI * 2);
+      g.stroke();
+    }
+    if (prog.phase === 'retrace' && i === prog.onPad && prog.since > 0) {
+      dwellRing(g, pad.x, pad.y, p.r + 0.3, clamp((ms - prog.since) / p.dwellMs, 0, 1), '#ffd23f', px);
+    }
+  });
+  const show = prog.phase === 'show';
+  headline(g, show ? (prog.showIdx === 0 ? 'WATCH…' : 'WATCH!') : 'YOUR TURN — REPEAT IT', WORLD_W / 2, 0.85, 0.7, show ? '#4dabf7' : '#ffd23f', px);
+  if (detail) {
+    sticker(g, WORLD_W - 2.0, 0.85, `ROUND ${prog.round}/${p.rounds} · ${prog.len} PADS`, 0.32, '#ffffff', '#111', px);
+    const hot = prog.faults >= p.faultCap - 1;
+    sticker(g, 1.7, 0.85, `FAULTS ${prog.faults}/${p.faultCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    if (!show) {
+      // Progress pips for this round (never which pad).
+      for (let i = 0; i < prog.len; i++) {
+        g.fillStyle = i < prog.pos ? '#69db7c' : 'rgba(255,255,255,0.35)';
+        g.fillRect(WORLD_W / 2 - prog.len * 0.22 + i * 0.44, 1.35, 0.32, 0.22);
+      }
+    }
+  }
+  void cursor;
+}
+
+// ---------------------------------------------------------------------------
+// Crane
+// ---------------------------------------------------------------------------
+
+function drawCrane(g: CanvasRenderingContext2D, p: CraneParams, prog: CraneProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
+  const top = prog.blocks[prog.blocks.length - 1];
+  const mx = craneMarkerX(p, t);
+  // Ground + stack.
+  g.fillStyle = '#3d3d3d';
+  g.fillRect(0, p.baseY, WORLD_W, WORLD_H - p.baseY);
+  prog.blocks.forEach((b, i) => {
+    const y = p.baseY - (i + 1) * p.blockH;
+    g.fillStyle = i === 0 ? '#6b6b6b' : ['#ff922b', '#ffd43b', '#4dabf7', '#69db7c', '#da77f2'][i % 5];
+    g.fillRect(b.x - b.w / 2, y, b.w, p.blockH);
+    g.lineWidth = 3 * px;
+    g.strokeStyle = '#111';
+    g.strokeRect(b.x - b.w / 2, y, b.w, p.blockH);
+  });
+  // Alignment zone above the stack.
+  const zoneY = p.baseY - prog.blocks.length * p.blockH;
+  g.fillStyle = Math.abs(mx - top.x) <= p.tol ? 'rgba(105,219,124,0.35)' : 'rgba(255,255,255,0.12)';
+  g.fillRect(top.x - p.tol, p.swingY + p.blockH, 2 * p.tol, zoneY - p.swingY - p.blockH);
+  // Cable + swinging block.
+  g.strokeStyle = '#ddd';
+  g.lineWidth = 3 * px;
+  g.beginPath();
+  g.moveTo(WORLD_W / 2, 0);
+  g.lineTo(mx, p.swingY);
+  g.stroke();
+  g.fillStyle = prog.toppled ? '#ff3b3b' : '#ff922b';
+  g.fillRect(mx - top.w / 2, p.swingY, top.w, p.blockH);
+  g.strokeStyle = '#111';
+  g.strokeRect(mx - top.w / 2, p.swingY, top.w, p.blockH);
+  // Lever (the catch): dwell to release.
+  const L = p.lever;
+  const inL = inRect(L, cursor.x, cursor.y);
+  g.fillStyle = inL ? '#ffd23f' : '#f3ead7';
+  g.fillRect(L.x, L.y, L.w, L.h);
+  g.lineWidth = 4 * px;
+  g.strokeStyle = '#111';
+  g.strokeRect(L.x, L.y, L.w, L.h);
+  worldText(g, prog.since > 0 ? 'RELEASING…' : 'HOLD TO DROP', L.x + L.w / 2, L.y + L.h / 2 + 0.04, fitText(g, 'HOLD TO DROP', L.w - 0.3, 0.34), { fill: '#111', align: 'center', baseline: 'middle' });
+  if (prog.since > 0) timeBar(g, L.x + 0.15, L.y + L.h - 0.3, L.w - 0.3, 0.18, clamp((ms - prog.since) / p.dwellMs, 0, 1), '#ff5a36', px);
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `HEIGHT ${craneHeight(prog)}/${p.target}`, 0.34, '#ffffff', '#111', px);
+    sticker(g, 1.5, 0.6, `MISSES ${prog.faults}`, 0.28, '#ffffff', '#111', px);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spotlight
+// ---------------------------------------------------------------------------
+
+function drawSpotlight(g: CanvasRenderingContext2D, p: SpotlightParams, prog: SpotlightProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
+  const pos = spotPos(p, t);
+  const hp = spotHp(prog, ms);
+  const inside = Math.hypot(cursor.x - pos.x, cursor.y - pos.y) <= p.radius;
+  // Path.
+  g.save();
+  g.setLineDash([0.2, 0.2]);
+  g.strokeStyle = 'rgba(255,255,255,0.18)';
+  g.lineWidth = 3 * px;
+  g.beginPath();
+  p.path.forEach((q, i) => (i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y)));
+  g.stroke();
+  g.restore();
+  // Decoy: a slightly off-white light that does not count.
+  if (p.decoy) {
+    const d = decoyPos(p, t);
+    g.fillStyle = 'rgba(180,200,255,0.18)';
+    g.beginPath();
+    g.arc(d.x, d.y, p.radius, 0, Math.PI * 2);
+    g.fill();
+    if (detail) worldText(g, '?', d.x, d.y + 0.1, 0.5, { fill: 'rgba(255,255,255,0.5)', align: 'center', baseline: 'middle' });
+  }
+  // The light.
+  const grad = g.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, p.radius * 1.3);
+  grad.addColorStop(0, 'rgba(255,245,200,0.95)');
+  grad.addColorStop(0.7, 'rgba(255,230,150,0.45)');
+  grad.addColorStop(1, 'rgba(255,230,150,0)');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(pos.x, pos.y, p.radius * 1.3, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = inside ? '#ffd23f' : '#ff3b3b';
+  g.lineWidth = 4 * px;
+  g.beginPath();
+  g.arc(pos.x, pos.y, p.radius, 0, Math.PI * 2);
+  g.stroke();
+  // Health bar + headline.
+  const frac = hp / p.hp;
+  timeBar(g, WORLD_W / 2 - 3, 0.5, 6, 0.5, frac, frac < 0.3 ? '#ff3b3b' : '#69db7c', px);
+  headline(g, inside ? 'STAY IN THE LIGHT' : 'GET BACK IN!', WORLD_W / 2, 1.3, 0.55, inside ? '#ffd23f' : '#ff3b3b', px);
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.75, `${Math.round((spotS(p, t) / p.length) * 100)}% WALKED`, 0.32, '#ffffff', '#111', px);
+    sticker(g, 1.5, 0.75, `HEALTH ${hp.toFixed(1)}s`, 0.3, frac < 0.3 ? '#ff3b3b' : '#ffffff', frac < 0.3 ? '#fff' : '#111', px);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sheep
+// ---------------------------------------------------------------------------
+
+function sheepShape(g: CanvasRenderingContext2D, x: number, y: number, vx: number, px: number, penned: boolean, ms: number) {
+  const wob = Math.sin(ms / 140 + x) * 0.04;
+  g.fillStyle = 'rgba(0,0,0,0.25)';
+  g.beginPath();
+  g.ellipse(x, y + 0.32, 0.42, 0.14, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = penned ? '#f3f0ff' : '#fff';
+  g.beginPath();
+  g.ellipse(x, y + wob, 0.42, 0.3, 0, 0, Math.PI * 2);
+  g.fill();
+  g.lineWidth = 3 * px;
+  g.strokeStyle = '#111';
+  g.stroke();
+  const hx = x + (vx >= 0 ? 0.36 : -0.36);
+  g.fillStyle = '#222';
+  g.beginPath();
+  g.arc(hx, y - 0.05 + wob, 0.17, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#fff';
+  g.beginPath();
+  g.arc(hx + (vx >= 0 ? 0.05 : -0.05), y - 0.09 + wob, 0.045, 0, Math.PI * 2);
+  g.fill();
+}
+
+function drawSheep(g: CanvasRenderingContext2D, p: SheepParams, prog: SheepProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  // Pen: fence on three sides, open on the left.
+  const P = p.pen;
+  g.fillStyle = 'rgba(0,0,0,0.12)';
+  g.fillRect(P.x, P.y, P.w, P.h);
+  g.strokeStyle = '#8b5a2b';
+  g.lineWidth = 8 * px;
+  g.beginPath();
+  g.moveTo(P.x, P.y);
+  g.lineTo(P.x + P.w, P.y);
+  g.lineTo(P.x + P.w, P.y + P.h);
+  g.lineTo(P.x, P.y + P.h);
+  g.stroke();
+  g.strokeStyle = '#111';
+  g.lineWidth = 2 * px;
+  g.stroke();
+  g.save();
+  g.setLineDash([0.15, 0.15]);
+  g.strokeStyle = 'rgba(255,255,255,0.5)';
+  g.lineWidth = 3 * px;
+  g.beginPath();
+  g.moveTo(P.x, P.y);
+  g.lineTo(P.x, P.y + P.h);
+  g.stroke();
+  g.restore();
+  if (detail) worldText(g, 'PEN', P.x + P.w / 2, P.y - 0.3, 0.36, { fill: '#fff', stroke: '#111', strokeW: 0.1, align: 'center', baseline: 'middle' });
+  // Push radius around the cursor.
+  g.save();
+  g.setLineDash([0.12, 0.12]);
+  g.strokeStyle = 'rgba(255,255,255,0.4)';
+  g.lineWidth = 3 * px;
+  g.beginPath();
+  g.arc(cursor.x, cursor.y, p.pushR, 0, Math.PI * 2);
+  g.stroke();
+  g.restore();
+  const pos = sheepAt(prog, ms);
+  prog.sheep.forEach((s, i) => sheepShape(g, pos[i].x, pos[i].y, s.vx, px, s.in, ms));
+  const penned = prog.sheep.filter(s => s.in).length;
+  if (prog.inSince > 0) {
+    const frac = clamp((ms - prog.inSince) / (p.holdS * 1000), 0, 1);
+    timeBar(g, WORLD_W / 2 - 3, 0.5, 6, 0.5, frac, '#69db7c', px);
+    headline(g, `ALL IN — HOLD ${Math.ceil(p.holdS - frac * p.holdS)}`, WORLD_W / 2, 1.3, 0.6, '#69db7c', px);
+  } else headline(g, `${penned}/${p.n} PENNED`, WORLD_W / 2, 0.9, 0.7, '#ffd23f', px);
+  if (detail) {
+    const hot = prog.escapes >= p.escapeCap - 1;
+    sticker(g, 1.6, 0.75, `ESCAPES ${prog.escapes}/${p.escapeCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ice
+// ---------------------------------------------------------------------------
+
+function drawIce(g: CanvasRenderingContext2D, p: IceParams, prog: IceProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  p.gates.forEach((gt, i) => {
+    const next = i === prog.next;
+    const done = i < prog.next;
+    g.fillStyle = done ? 'rgba(105,219,124,0.5)' : next ? 'rgba(255,210,63,0.35)' : 'rgba(255,255,255,0.15)';
+    g.beginPath();
+    g.arc(gt.x, gt.y, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.lineWidth = (next ? 5 : 3) * px;
+    g.strokeStyle = done ? '#69db7c' : next ? '#ffd23f' : 'rgba(255,255,255,0.6)';
+    g.stroke();
+    worldText(g, done ? '✓' : String(i + 1), gt.x, gt.y + 0.05, p.r * 0.9, { font: FONT_PIXEL, fill: '#fff', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+    if (next && prog.since > 0) {
+      const frac = clamp((ms - prog.since) / p.restMs, 0, 1);
+      dwellRing(g, gt.x, gt.y, p.r + 0.3, frac, '#ffd23f', px);
+      sticker(g, gt.x, gt.y - p.r - 0.45, 'STOPPING…', 0.3, '#ffd23f', '#111', px);
+    } else if (next && prog.inGate) sticker(g, gt.x, gt.y - p.r - 0.45, 'TOO FAST!', 0.3, '#ff3b3b', '#fff', px);
+  });
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `GATE ${Math.min(prog.next + 1, p.gates.length)}/${p.gates.length}`, 0.34, '#ffffff', '#111', px);
+    const hot = prog.faults >= p.faultCap - 1;
+    sticker(g, 1.6, 0.6, `SLIPS ${prog.faults}/${p.faultCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    worldText(g, 'STOP DEAD INSIDE EACH GATE — IT IS SLIPPERY', WORLD_W / 2, 1.3, 0.3, { fill: 'rgba(255,255,255,0.7)', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+  }
+  void cursor;
+}
+
+// ---------------------------------------------------------------------------
+// Plank
+// ---------------------------------------------------------------------------
+
+function drawPlank(g: CanvasRenderingContext2D, p: PlankParams, prog: PlankProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  const fill = plankFill(p, prog, ms);
+  p.tiles.forEach((t, i) => {
+    const done = i < prog.next;
+    const next = i === prog.next;
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.fillRect(t.x + 0.08, t.y + 0.1, t.w, t.h);
+    g.fillStyle = done ? '#b07a3a' : 'rgba(255,255,255,0.12)';
+    g.fillRect(t.x, t.y, t.w, t.h);
+    if (next && fill > 0) {
+      g.fillStyle = '#d9a35c';
+      g.fillRect(t.x, t.y, t.w * fill, t.h);
+    }
+    g.lineWidth = (next ? 4 : 2) * px;
+    g.strokeStyle = next ? '#ffd23f' : done ? '#5a3a16' : 'rgba(255,255,255,0.4)';
+    g.strokeRect(t.x, t.y, t.w, t.h);
+    if (done) {
+      g.strokeStyle = 'rgba(0,0,0,0.25)';
+      g.lineWidth = 2 * px;
+      g.beginPath();
+      g.moveTo(t.x + t.w * 0.5, t.y);
+      g.lineTo(t.x + t.w * 0.5, t.y + t.h);
+      g.stroke();
+    }
+  });
+  const t = p.tiles[prog.next];
+  if (t) {
+    const still = prog.since > 0;
+    sticker(g, t.x + t.w / 2, t.y - 0.4, still ? `HOLD STILL ${Math.ceil((p.fillMs * (1 - fill)) / 1000)}` : 'HOLD STILL HERE', 0.3, still ? '#ffd23f' : '#ffffff', '#111', px);
+  }
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `PLANK ${Math.min(prog.next + 1, p.tiles.length)}/${p.tiles.length}`, 0.34, '#ffffff', '#111', px);
+    if (prog.wipes) sticker(g, 1.4, 0.6, `WIPED ×${prog.wipes}`, 0.28, '#ffffff', '#111', px);
+    if (p.shove) worldText(g, '⬇ THE WIND PUSHES DOWN — LEAN AGAINST IT', WORLD_W / 2, 1.3, 0.3, { fill: 'rgba(255,255,255,0.75)', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+  }
+  void cursor;
+}
+
+// ---------------------------------------------------------------------------
+// Seesaw
+// ---------------------------------------------------------------------------
+
+function drawSeesaw(g: CanvasRenderingContext2D, p: SeesawParams, prog: SeesawProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  const a = prog.angle;
+  // Pivot.
+  g.fillStyle = '#555';
+  g.beginPath();
+  g.moveTo(p.pivot.x - 0.6, WORLD_H);
+  g.lineTo(p.pivot.x + 0.6, WORLD_H);
+  g.lineTo(p.pivot.x, p.pivot.y);
+  g.closePath();
+  g.fill();
+  g.lineWidth = 3 * px;
+  g.strokeStyle = '#111';
+  g.stroke();
+  // Board.
+  const L = seesawPoint(p, a, -p.halfLen);
+  const R = seesawPoint(p, a, p.halfLen);
+  g.strokeStyle = '#8b5a2b';
+  g.lineWidth = 10 * px;
+  g.beginPath();
+  g.moveTo(L.x, L.y);
+  g.lineTo(R.x, R.y);
+  g.stroke();
+  g.strokeStyle = '#111';
+  g.lineWidth = 2 * px;
+  g.stroke();
+  // Pockets + balls.
+  prog.balls.forEach((b, i) => {
+    const pk = seesawPoint(p, a, b.pocket, 0.05);
+    g.fillStyle = 'rgba(255,210,63,0.5)';
+    g.beginPath();
+    g.ellipse(pk.x, pk.y, p.pocketW / 2, 0.14, a, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#ffd23f';
+    g.lineWidth = 3 * px;
+    g.stroke();
+    const ball = seesawPoint(p, a, b.s, SEESAW_BALL_R + 0.05);
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.beginPath();
+    g.ellipse(ball.x, ball.y + SEESAW_BALL_R + 0.1, SEESAW_BALL_R, 0.1, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = ['#ff4d6d', '#4dabf7', '#69db7c'][i % 3];
+    g.beginPath();
+    g.arc(ball.x, ball.y, SEESAW_BALL_R, 0, Math.PI * 2);
+    g.fill();
+    g.lineWidth = 3 * px;
+    g.strokeStyle = '#111';
+    g.stroke();
+  });
+  headline(g, cursor.x < p.pivot.x - 0.5 ? '◀ TILT LEFT' : cursor.x > p.pivot.x + 0.5 ? 'TILT RIGHT ▶' : 'LEVEL', WORLD_W / 2, 0.9, 0.6, '#ffd23f', px);
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `POCKETS ${prog.pockets}/${p.target}`, 0.34, '#ffffff', '#111', px);
+    const hot = prog.faults >= p.faultCap - 1;
+    sticker(g, 1.6, 0.6, `OFF THE END ${prog.faults}/${p.faultCap}`, 0.28, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    worldText(g, 'CURSOR LEFT/RIGHT TILTS THE BOARD · ROLL THE BALL INTO THE POCKET SLOWLY', WORLD_W / 2, 1.45, 0.28, { fill: 'rgba(255,255,255,0.7)', stroke: '#111', strokeW: 0.08, align: 'center', baseline: 'middle' });
+  }
+  void ms;
+}
+
+// ---------------------------------------------------------------------------
+// Belts
+// ---------------------------------------------------------------------------
+
+function drawBelts(g: CanvasRenderingContext2D, p: BeltsParams, prog: BeltsProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
+  const rev = beltsReversed(p, t);
+  for (let r = 0; r < p.rows; r++)
+    for (let c = 0; c < p.cols; c++) {
+      const ch = p.tiles[r * p.cols + c];
+      if (ch === '.') continue;
+      const x = c;
+      const y = r;
+      if ('^v<>'.includes(ch)) {
+        g.fillStyle = '#4a4e69';
+        g.fillRect(x, y, 1, 1);
+        // Moving chevrons.
+        const dir = beltDir(p, x + 0.5, y + 0.5, t)!;
+        const ph = ((ms / 400) % 1) * 1;
+        g.strokeStyle = 'rgba(255,255,255,0.7)';
+        g.lineWidth = 3 * px;
+        for (let k = 0; k < 2; k++) {
+          const f = (ph + k * 0.5) % 1;
+          const cx = x + 0.5 + dir.x * (f - 0.5) * 0.8;
+          const cy = y + 0.5 + dir.y * (f - 0.5) * 0.8;
+          g.beginPath();
+          g.moveTo(cx - dir.x * 0.15 - dir.y * 0.25, cy - dir.y * 0.15 - dir.x * 0.25);
+          g.lineTo(cx + dir.x * 0.1, cy + dir.y * 0.1);
+          g.lineTo(cx - dir.x * 0.15 + dir.y * 0.25, cy - dir.y * 0.15 + dir.x * 0.25);
+          g.stroke();
+        }
+      } else if (ch === 'X') {
+        g.fillStyle = Math.floor(ms / 300) % 2 ? '#ff3b3b' : '#c92a2a';
+        g.fillRect(x, y, 1, 1);
+        g.strokeStyle = '#111';
+        g.lineWidth = 3 * px;
+        g.beginPath();
+        g.moveTo(x + 0.25, y + 0.25);
+        g.lineTo(x + 0.75, y + 0.75);
+        g.moveTo(x + 0.75, y + 0.25);
+        g.lineTo(x + 0.25, y + 0.75);
+        g.stroke();
+      } else if (ch === 'C') {
+        const active = prog.checkpoint.x === x + 0.5 && prog.checkpoint.y === y + 0.5;
+        g.fillStyle = active ? '#69db7c' : 'rgba(105,219,124,0.35)';
+        g.fillRect(x, y, 1, 1);
+        worldText(g, '⚑', x + 0.5, y + 0.55, 0.6, { fill: '#111', align: 'center', baseline: 'middle' });
+      } else if (ch === 'E') {
+        g.fillStyle = Math.floor(ms / 250) % 2 ? '#ffd23f' : '#ffe680';
+        g.fillRect(x, y, 1, 1);
+        if (r === Math.floor(p.rows / 2)) worldText(g, 'EXIT', x + 0.5, y + 0.55, 0.36, { fill: '#111', align: 'center', baseline: 'middle' });
+      } else if (ch === 'S') {
+        g.fillStyle = 'rgba(255,255,255,0.3)';
+        g.fillRect(x, y, 1, 1);
+      }
+      g.strokeStyle = 'rgba(0,0,0,0.35)';
+      g.lineWidth = 1.5 * px;
+      g.strokeRect(x, y, 1, 1);
+    }
+  if (detail) {
+    const hot = prog.faults >= p.faultCap - 1;
+    sticker(g, 1.6, 0.6, `ZAPPED ${prog.faults}/${p.faultCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    if (p.reverseS > 0) {
+      const left = p.reverseS - (Math.max(0, t) % p.reverseS);
+      sticker(g, WORLD_W - 2.2, 0.6, `${rev ? 'REVERSED' : 'FORWARD'} · FLIP IN ${Math.ceil(left)}`, 0.28, rev ? '#ff922b' : '#ffffff', '#111', px);
+    }
+  }
+  void cursor;
+}
+
+// ---------------------------------------------------------------------------
+// Needle
+// ---------------------------------------------------------------------------
+
+function drawNeedle(g: CanvasRenderingContext2D, p: NeedleParams, prog: NeedleProgress, px: number, ms: number, t: number, cursor: { x: number; y: number }, detail: boolean) {
+  p.walls.forEach((w, i) => {
+    const gy = needleGapY(p, i, t);
+    const passed = i < prog.next;
+    const next = i === prog.next;
+    g.fillStyle = passed ? 'rgba(255,255,255,0.15)' : next ? '#ff5a36' : '#8d99ae';
+    g.fillRect(w.x - p.thick / 2, NEEDLE_TOP, p.thick, gy - p.gapH / 2 - NEEDLE_TOP);
+    g.fillRect(w.x - p.thick / 2, gy + p.gapH / 2, p.thick, WORLD_H - gy - p.gapH / 2);
+    if (!passed) {
+      g.lineWidth = 2 * px;
+      g.strokeStyle = '#111';
+      g.strokeRect(w.x - p.thick / 2, NEEDLE_TOP, p.thick, gy - p.gapH / 2 - NEEDLE_TOP);
+      g.strokeRect(w.x - p.thick / 2, gy + p.gapH / 2, p.thick, WORLD_H - gy - p.gapH / 2);
+    }
+    if (next) {
+      // Gap markers.
+      g.fillStyle = '#ffd23f';
+      g.beginPath();
+      g.moveTo(w.x - 0.35, gy - p.gapH / 2 - 0.3);
+      g.lineTo(w.x + 0.35, gy - p.gapH / 2 - 0.3);
+      g.lineTo(w.x, gy - p.gapH / 2 + 0.05);
+      g.closePath();
+      g.fill();
+      g.beginPath();
+      g.moveTo(w.x - 0.35, gy + p.gapH / 2 + 0.3);
+      g.lineTo(w.x + 0.35, gy + p.gapH / 2 + 0.3);
+      g.lineTo(w.x, gy + p.gapH / 2 - 0.05);
+      g.closePath();
+      g.fill();
+    }
+  });
+  if (ms < prog.frozenUntil) headline(g, 'OUCH! BACK UP', WORLD_W / 2, 0.9, 0.7, '#ff3b3b', px);
+  else headline(g, 'THREAD THE GAP ▶', WORLD_W / 2, 0.9, 0.6, '#ffd23f', px);
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `WALL ${Math.min(prog.next + 1, p.walls.length)}/${p.walls.length}`, 0.34, '#ffffff', '#111', px);
+    const hot = prog.faults >= p.faultCap - 1;
+    sticker(g, 1.6, 0.6, `HITS ${prog.faults}/${p.faultCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+  }
+  void cursor;
+}
+
+// ---------------------------------------------------------------------------
+// Wires
+// ---------------------------------------------------------------------------
+
+function drawWires(g: CanvasRenderingContext2D, p: WiresParams, prog: WiresProgress, px: number, ms: number, cursor: { x: number; y: number }, detail: boolean) {
+  // Connected wire so far.
+  if (prog.done.length > 1) {
+    g.lineWidth = 8 * px;
+    g.strokeStyle = '#111';
+    g.beginPath();
+    prog.done.forEach((ni, i) => (i ? g.lineTo(p.nodes[ni].x, p.nodes[ni].y) : g.moveTo(p.nodes[ni].x, p.nodes[ni].y)));
+    g.stroke();
+    g.lineWidth = 4 * px;
+    g.strokeStyle = '#ffd23f';
+    g.stroke();
+  }
+  p.nodes.forEach((n, i) => {
+    const done = prog.done.includes(i);
+    const col = WIRE_COLORS[n.color] ?? '#fff';
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.beginPath();
+    g.arc(n.x + 0.08, n.y + 0.1, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = done ? '#444' : col;
+    g.beginPath();
+    g.arc(n.x, n.y, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.lineWidth = 4 * px;
+    g.strokeStyle = '#111';
+    g.stroke();
+    if (done) worldText(g, '✓', n.x, n.y + 0.05, p.r, { font: FONT_PIXEL, fill: col, align: 'center', baseline: 'middle' });
+    if (i === prog.onNode && prog.since > 0) dwellRing(g, n.x, n.y, p.r + 0.3, clamp((ms - prog.since) / p.dwellMs, 0, 1), '#ffd23f', px);
+  });
+  // Only the next color is ever shown.
+  const nc = prog.nextColor;
+  if (nc >= 0) {
+    const col = WIRE_COLORS[nc];
+    g.fillStyle = col;
+    g.fillRect(WORLD_W / 2 - 0.55, 0.35, 1.1, 1.1);
+    g.lineWidth = 4 * px;
+    g.strokeStyle = '#111';
+    g.strokeRect(WORLD_W / 2 - 0.55, 0.35, 1.1, 1.1);
+    headline(g, `CONNECT ${WIRE_NAMES[nc]}`, WORLD_W / 2 + 3.6, 0.9, 0.6, col, px);
+  } else headline(g, 'ALL WIRED!', WORLD_W / 2, 0.9, 0.7, '#69db7c', px);
+  if (detail) {
+    sticker(g, WORLD_W - 1.9, 0.6, `WIRE ${Math.min(prog.pos + 1, p.total)}/${p.total}`, 0.34, '#ffffff', '#111', px);
+    const hot = prog.strikes >= p.strikeCap - 1;
+    sticker(g, 1.6, 0.6, `STRIKES ${prog.strikes}/${p.strikeCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+  }
+  void cursor;
 }
 
 /** Classic pixel arrow. `size` = height in world units; tip at (x, y). */

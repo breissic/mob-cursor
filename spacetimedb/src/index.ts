@@ -65,6 +65,51 @@ import {
   valvesStep,
   voteLayout,
   voteResolve,
+  pickCards,
+  postIntegrate,
+  makeEcho,
+  echoStep,
+  makeCrane,
+  craneStep,
+  makeSpotlight,
+  spotlightStep,
+  makeSheep,
+  sheepStep,
+  makeIce,
+  iceStep,
+  makePlank,
+  plankStep,
+  makeSeesaw,
+  seesawStep,
+  makeBelts,
+  beltsStep,
+  makeNeedle,
+  needleStep,
+  NEEDLE_TOP,
+  makeWires,
+  wiresStep,
+  type EchoParams,
+  type EchoProgress,
+  type EchoSecret,
+  type CraneParams,
+  type CraneProgress,
+  type SpotlightParams,
+  type SpotlightProgress,
+  type SheepParams,
+  type SheepProgress,
+  type IceParams,
+  type IceProgress,
+  type PlankParams,
+  type PlankProgress,
+  type SeesawParams,
+  type SeesawProgress,
+  type BeltsParams,
+  type BeltsProgress,
+  type NeedleParams,
+  type NeedleProgress,
+  type WiresParams,
+  type WiresProgress,
+  type WiresSecret,
   type BalloonParams,
   type BalloonProgress,
   type ChairsParams,
@@ -450,6 +495,13 @@ function startPos(kind: string, params: unknown) {
     return tileCenter(m, m.start.c, m.start.r);
   }
   if (kind === 'redlight') return (params as RedlightParams).path[0];
+  if (kind === 'spotlight') return (params as SpotlightParams).path[0];
+  if (kind === 'belts') return (params as BeltsParams).start;
+  if (kind === 'needle') return { x: 1, y: (NEEDLE_TOP + WORLD_H) / 2 };
+  if (kind === 'plank') {
+    const t0 = (params as PlankParams).tiles[0];
+    return t0 ? { x: Math.max(0.3, t0.x - 0.6), y: t0.y + t0.h / 2 } : { x: WORLD_W / 2, y: WORLD_H / 2 };
+  }
   return { x: WORLD_W / 2, y: WORLD_H / 2 };
 }
 
@@ -501,6 +553,32 @@ function startLevel(ctx: Ctx, room: RoomRow, kind: PlayKind, stage = 1) {
     ({ params, progress } = makeValves(rand, sp, playAt));
   } else if (kind === 'stations') {
     ({ params, progress } = makeStations(rand, sp));
+  } else if (kind === 'echo') {
+    const e = makeEcho(rand, sp, playAt);
+    params = e.params;
+    progress = e.progress;
+    secret = JSON.stringify(e.secret);
+  } else if (kind === 'crane') {
+    ({ params, progress } = makeCrane(sp));
+  } else if (kind === 'spotlight') {
+    ({ params, progress } = makeSpotlight(sp, playAt));
+  } else if (kind === 'sheep') {
+    ({ params, progress } = makeSheep(rand, sp, playAt));
+  } else if (kind === 'ice') {
+    ({ params, progress } = makeIce(rand, sp));
+  } else if (kind === 'plank') {
+    ({ params, progress } = makePlank(sp));
+  } else if (kind === 'seesaw') {
+    ({ params, progress } = makeSeesaw(rand, sp));
+  } else if (kind === 'belts') {
+    ({ params, progress } = makeBelts(rand, sp));
+  } else if (kind === 'needle') {
+    ({ params, progress } = makeNeedle(rand, sp));
+  } else if (kind === 'wires') {
+    const w = makeWires(rand, sp);
+    params = w.params;
+    progress = w.progress;
+    secret = JSON.stringify(w.secret);
   }
   const start = startPos(kind, params);
   const row = ctx.db.level.insert({
@@ -544,16 +622,17 @@ function startNext(ctx: Ctx, room: RoomRow) {
   else startLevel(ctx, room, n.kind, n.stage);
 }
 
-/** Picker round: one card per game; the card the cursor is inside when the timer hits zero is the next game. */
+/** Picker round: a fresh random PICK_CARDS-card subset (never the game that just finished); the card the cursor is inside when the timer hits zero is the next game. */
 function startVote(ctx: Ctx, room: RoomRow) {
   const cur = currentLevel(ctx, room);
   if (cur && cur.state === 'running') endLevel(ctx, room, cur.id, 'skipped');
   clearAdvance(ctx, room.id);
   const playAt = nowMs(ctx) + COUNTDOWN_S * 1000;
   const endsAt = playAt + VOTE_SECS * 1000;
+  const lastKind = cur && isPlayKind(cur.kind) ? cur.kind : undefined;
   const params: VoteParams & StageMeta = {
-    cards: voteLayout(LEVEL_ROTATION),
-    lastKind: cur && isPlayKind(cur.kind) ? cur.kind : undefined,
+    cards: voteLayout(pickCards(() => ctx.random(), lastKind)),
+    lastKind,
     stage: 1,
     stages: 1,
     playAt,
@@ -777,6 +856,20 @@ export const create_room = spacetimedb.reducer({ name: t.string() }, (ctx, { nam
   ensureStarted(ctx, getRoom(ctx, room.id));
 });
 
+/** Leave the room entirely (back to the join screen). Like a kick without the ban: the player row goes, so a reload does not quietly rejoin. */
+export const leave = spacetimedb.reducer(ctx => {
+  const p = ctx.db.player.identity.find(ctx.sender);
+  if (!p) return;
+  ctx.db.player.identity.delete(ctx.sender);
+  ctx.db.pointer.identity.delete(ctx.sender);
+  ctx.db.pointerRate.identity.delete(ctx.sender);
+  ctx.db.idle.identity.delete(ctx.sender);
+  ctx.db.playerStats.identity.delete(ctx.sender);
+  log(ctx, p.roomId, 'leave', hex(ctx.sender), { name: p.name });
+  refreshRoom(ctx, p.roomId);
+  syncTickSchedule(ctx);
+});
+
 export const set_pointer = spacetimedb.reducer({ x: t.f32(), y: t.f32() }, (ctx, { x, y }) => {
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new SenderError('bad coordinates');
   const p = ctx.db.player.identity.find(ctx.sender);
@@ -901,6 +994,9 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
   const before = { x: cur.x, y: cur.y };
   const spring = cursorPhysics(running?.kind, cfg);
   let body = integrate(cur, target, dt, spring.gain, spring.damping, spring.maxSpeed);
+  // Mode-specific motion on top of the spring (ice slide, plank shove, belt drag); shared with the client's prediction.
+  const tPlaySec = running ? (Number(tNow / 1000n) - playAtOf(running)) / 1000 : 0;
+  if (running && tPlaySec >= 0) body = postIntegrate(running.kind, JSON.parse(running.params), cur, body, dt, tPlaySec);
   const ch = chaosOf(pts, cur.x, cur.y);
   const chaosSmoothed = cur.chaos + (ch - cur.chaos) * Math.min(1, dt * 3);
 
@@ -1067,6 +1163,127 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
       }
       if (r.won) outcome = 'won';
       else if (r.prog.cancels >= p.skipCap) outcome = 'lost';
+    } else if (running.kind === 'echo') {
+      const p = JSON.parse(running.params) as EchoParams;
+      const prog = JSON.parse(progress) as EchoProgress;
+      const sec = ctx.db.levelSecret.levelId.find(running.id);
+      if (sec) {
+        const r = echoStep(p, prog, JSON.parse(sec.data) as EchoSecret, tMs, body);
+        if (r.prog !== prog) progress = JSON.stringify(r.prog);
+        if (r.event) {
+          const at = r.pad >= 0 ? p.pads[r.pad] : body;
+          emit(`echo_${r.event}`, at.x, at.y, String(r.pad));
+          if (r.event !== 'flash') log(ctx, room.id, `echo_${r.event}`, '', { round: r.prog.round, of: p.rounds, faults: r.prog.faults, faultCap: p.faultCap });
+        }
+        if (r.won) outcome = 'won';
+        else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+      }
+    } else if (running.kind === 'crane') {
+      const p = JSON.parse(running.params) as CraneParams;
+      const prog = JSON.parse(progress) as CraneProgress;
+      const r = craneStep(p, prog, tMs, tPlay, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const top = r.prog.blocks[r.prog.blocks.length - 1];
+        emit(`crane_${r.event}`, top.x, p.baseY - r.prog.blocks.length * p.blockH);
+        log(ctx, room.id, `crane_${r.event}`, '', { height: r.prog.blocks.length - 1, of: p.target, dx: r.prog.lastDx });
+      }
+      if (r.prog.toppled) outcome = 'lost';
+      else if (r.won) outcome = 'won';
+    } else if (running.kind === 'spotlight') {
+      const p = JSON.parse(running.params) as SpotlightParams;
+      const prog = JSON.parse(progress) as SpotlightProgress;
+      const r = spotlightStep(p, prog, tMs, tPlay, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) emit(`spot_${r.event}`, body.x, body.y);
+      if (r.lost) outcome = 'lost';
+      else if (r.won) outcome = 'won';
+    } else if (running.kind === 'sheep') {
+      const p = JSON.parse(running.params) as SheepParams;
+      const prog = JSON.parse(progress) as SheepProgress;
+      const r = sheepStep(p, prog, tMs, dt, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      for (const e of r.events) {
+        if (e.kind === 'push') continue;
+        const sh = r.prog.sheep[e.i];
+        emit(`sheep_${e.kind}`, sh.x, sh.y);
+        log(ctx, room.id, `sheep_${e.kind}`, '', { penned: r.prog.sheep.filter(q => q.in).length, of: p.n, escapes: r.prog.escapes, escapeCap: p.escapeCap });
+      }
+      if (r.prog.escapes >= p.escapeCap) outcome = 'lost';
+      else if (r.won) outcome = 'won';
+    } else if (running.kind === 'ice') {
+      const p = JSON.parse(running.params) as IceParams;
+      const prog = JSON.parse(progress) as IceProgress;
+      const r = iceStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const gte = p.gates[prog.next] ?? body;
+        emit(`ice_${r.event}`, gte.x, gte.y);
+        log(ctx, room.id, `ice_${r.event}`, '', { next: r.prog.next, of: p.gates.length, faults: r.prog.faults, faultCap: p.faultCap });
+      }
+      if (r.won) outcome = 'won';
+      else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+    } else if (running.kind === 'plank') {
+      const p = JSON.parse(running.params) as PlankParams;
+      const prog = JSON.parse(progress) as PlankProgress;
+      const r = plankStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event) {
+        const tl = p.tiles[prog.next] ?? { x: body.x, y: body.y, w: 0, h: 0 };
+        emit(`plank_${r.event}`, tl.x + tl.w / 2, tl.y + tl.h / 2);
+        if (r.event === 'tile') log(ctx, room.id, 'plank_tile', '', { next: r.prog.next, of: p.tiles.length });
+      }
+      if (r.won) outcome = 'won';
+    } else if (running.kind === 'seesaw') {
+      const p = JSON.parse(running.params) as SeesawParams;
+      const prog = JSON.parse(progress) as SeesawProgress;
+      const r = seesawStep(p, prog, dt, body, rand);
+      progress = JSON.stringify(r.prog);
+      for (const e of r.events) {
+        emit(`seesaw_${e.kind}`, p.pivot.x, p.pivot.y);
+        log(ctx, room.id, `seesaw_${e.kind}`, '', { pockets: r.prog.pockets, of: p.target, faults: r.prog.faults, faultCap: p.faultCap });
+      }
+      if (r.won) outcome = 'won';
+      else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+    } else if (running.kind === 'belts') {
+      const p = JSON.parse(running.params) as BeltsParams;
+      const prog = JSON.parse(progress) as BeltsProgress;
+      const r = beltsStep(p, prog, tMs, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      body = r.body;
+      if (r.event) {
+        emit(`belts_${r.event}`, before.x, before.y);
+        log(ctx, room.id, `belts_${r.event}`, '', { faults: r.prog.faults, faultCap: p.faultCap, checkpoints: r.prog.checkpoints });
+      }
+      if (r.won) outcome = 'won';
+      else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+    } else if (running.kind === 'needle') {
+      const p = JSON.parse(running.params) as NeedleParams;
+      const prog = JSON.parse(progress) as NeedleProgress;
+      const r = needleStep(p, prog, tMs, tPlay, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      body = r.body;
+      if (r.event) {
+        emit(`needle_${r.event}`, p.walls[prog.next].x, before.y);
+        log(ctx, room.id, `needle_${r.event}`, '', { next: r.prog.next, of: p.walls.length, faults: r.prog.faults, faultCap: p.faultCap });
+      }
+      if (r.won) outcome = 'won';
+      else if (r.prog.faults >= p.faultCap) outcome = 'lost';
+    } else if (running.kind === 'wires') {
+      const p = JSON.parse(running.params) as WiresParams;
+      const prog = JSON.parse(progress) as WiresProgress;
+      const sec = ctx.db.levelSecret.levelId.find(running.id);
+      if (sec) {
+        const r = wiresStep(p, prog, JSON.parse(sec.data) as WiresSecret, tMs, body);
+        if (r.prog !== prog) progress = JSON.stringify(r.prog);
+        if (r.event) {
+          const nd = r.node >= 0 ? p.nodes[r.node] : body;
+          emit(`wires_${r.event}`, nd.x, nd.y);
+          log(ctx, room.id, `wires_${r.event}`, '', { pos: r.prog.pos, of: p.total, strikes: r.prog.strikes, strikeCap: p.strikeCap });
+        }
+        if (r.won) outcome = 'won';
+        else if (r.prog.strikes >= p.strikeCap) outcome = 'lost';
+      }
     }
     if (running.kind === 'vote') {
       if (timeUp) {

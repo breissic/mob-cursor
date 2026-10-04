@@ -46,6 +46,7 @@ import AdminStartStageReducer from "./admin_start_stage_reducer";
 import AdminStopLevelReducer from "./admin_stop_level_reducer";
 import CreateRoomReducer from "./create_room_reducer";
 import JoinReducer from "./join_reducer";
+import LeaveReducer from "./leave_reducer";
 import PostCommentaryReducer from "./post_commentary_reducer";
 import SetPointerReducer from "./set_pointer_reducer";
 
@@ -250,6 +251,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_stop_level", AdminStopLevelReducer),
   __reducerSchema("create_room", CreateRoomReducer),
   __reducerSchema("join", JoinReducer),
+  __reducerSchema("leave", LeaveReducer),
   __reducerSchema("post_commentary", PostCommentaryReducer),
   __reducerSchema("set_pointer", SetPointerReducer),
 );

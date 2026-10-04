@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { GAME_META } from '../game/draw';
 import { spriteUrl } from '../game/sprites';
 import { Win } from './Win';
-import { dollS, isPlayKind, STAGES, valveInZone, valveLevelsNow, VOTE_SECS, voteHover } from '../../spacetimedb/src/sim';
+import { craneHeight, dollS, isPlayKind, plankFill, spotHp, STAGES, stationsRevealed, valveInZone, valveLevelsNow, VOTE_SECS, voteHover, WIRE_NAMES } from '../../spacetimedb/src/sim';
 
 // Game chrome shared by the projector and every phone: status chips (with a
 // visible indicator for every time-based thing), the intro loading screen, the
@@ -53,7 +53,8 @@ export function phaseOf(current: LevelRow | null | undefined, now: number) {
   const inResults = ended && now - endedMs > 1500;
   const inLobby = !current || (!running && !ended);
   const countdown = inIntro ? Math.ceil(((meta.playAt ?? 0) - now) / 1000) : 0;
-  const timeLeft = running && !inIntro && current ? Math.max(0, Number(current.deadline.microsSinceUnixEpoch / 1000n) - now) / 1000 : null;
+  // Red light, green light hides its clock: the doll's rhythm is the only timer players get.
+  const timeLeft = running && !inIntro && current && current.kind !== 'redlight' ? Math.max(0, Number(current.deadline.microsSinceUnixEpoch / 1000n) - now) / 1000 : null;
   return { meta, running, endedMs, inIntro, ended, inResults, inLobby, countdown, timeLeft };
 }
 
@@ -225,6 +226,117 @@ export function GameStatus({ level, now, cursor }: { level: LevelRow; now: numbe
           <span className="chip" style={{ background: prog.cancels >= p.skipCap - 1 ? '#ff3b3b' : '#fff', color: prog.cancels >= p.skipCap - 1 ? '#fff' : '#111' }}>
             LEFT EARLY {prog.cancels}/{p.skipCap}
           </span>
+          {stationsRevealed(p, (now - playAt) / 1000) && <span className="chip" style={{ background: '#ff5a36', color: '#fff' }}>MEMORIZE {secs(playAt + p.revealMs - now)}</span>}
+        </>
+      );
+    case 'echo':
+      return (
+        <>
+          <span className="chip">
+            ROUND {prog.round}/{p.rounds}
+          </span>
+          <span className="chip" style={{ background: prog.phase === 'show' ? '#4dabf7' : '#ffd23f' }}>{prog.phase === 'show' ? 'WATCH' : `REPEAT ${prog.pos}/${prog.len}`}</span>
+          <span className="chip">
+            <Hearts total={p.faultCap} left={p.faultCap - prog.faults} />
+          </span>
+        </>
+      );
+    case 'crane':
+      return (
+        <>
+          <span className="chip">
+            HEIGHT {craneHeight(prog)}/{p.target}
+          </span>
+          {prog.since > 0 && <span className="chip" style={{ background: '#ffd23f' }}>RELEASING</span>}
+          <span className="chip">MISSES {prog.faults}</span>
+        </>
+      );
+    case 'spotlight': {
+      const hp = spotHp(prog, now);
+      return (
+        <>
+          <span className="chip" style={{ background: hp < p.hp * 0.3 ? '#ff3b3b' : '#fff', color: hp < p.hp * 0.3 ? '#fff' : '#111' }}>
+            HEALTH {hp.toFixed(1)}s
+          </span>
+          <span className="chip" style={{ background: prog.outside ? '#ff3b3b' : '#43e05a', color: prog.outside ? '#fff' : '#111' }}>{prog.outside ? 'OUTSIDE!' : 'IN THE LIGHT'}</span>
+        </>
+      );
+    }
+    case 'sheep':
+      return (
+        <>
+          <span className="chip">
+            PENNED {prog.sheep.filter((s: { in: boolean }) => s.in).length}/{p.n}
+          </span>
+          {prog.inSince > 0 && <span className="chip" style={{ background: '#43e05a' }}>HOLD {secs(prog.inSince + p.holdS * 1000 - now)}</span>}
+          <span className="chip">
+            <Hearts total={p.escapeCap} left={p.escapeCap - prog.escapes} />
+          </span>
+        </>
+      );
+    case 'ice':
+      return (
+        <>
+          <span className="chip">
+            GATE {Math.min(prog.next + 1, p.gates.length)}/{p.gates.length}
+          </span>
+          {prog.since > 0 && <span className="chip" style={{ background: '#ffd23f' }}>STOPPING</span>}
+          <span className="chip">
+            <Hearts total={p.faultCap} left={p.faultCap - prog.faults} />
+          </span>
+        </>
+      );
+    case 'plank':
+      return (
+        <>
+          <span className="chip">
+            PLANK {Math.min(prog.next + 1, p.tiles.length)}/{p.tiles.length}
+          </span>
+          {prog.since > 0 && <span className="chip" style={{ background: '#ffd23f' }}>FILL {Math.round(plankFill(p, prog, now) * 100)}%</span>}
+          {prog.wipes > 0 && <span className="chip">WIPED ×{prog.wipes}</span>}
+        </>
+      );
+    case 'seesaw':
+      return (
+        <>
+          <span className="chip">
+            POCKETS {prog.pockets}/{p.target}
+          </span>
+          <span className="chip">
+            <Hearts total={p.faultCap} left={p.faultCap - prog.faults} />
+          </span>
+        </>
+      );
+    case 'belts':
+      return (
+        <>
+          <span className="chip">
+            <Hearts total={p.faultCap} left={p.faultCap - prog.faults} />
+          </span>
+          <span className="chip">CHECKPOINTS {prog.checkpoints}</span>
+        </>
+      );
+    case 'needle':
+      return (
+        <>
+          <span className="chip">
+            WALL {Math.min(prog.next + 1, p.walls.length)}/{p.walls.length}
+          </span>
+          <span className="chip">
+            <Hearts total={p.faultCap} left={p.faultCap - prog.faults} />
+          </span>
+        </>
+      );
+    case 'wires':
+      return (
+        <>
+          <span className="chip">
+            WIRE {Math.min(prog.pos + 1, p.total)}/{p.total}
+          </span>
+          {prog.nextColor >= 0 && <span className="chip" style={{ background: '#ffd23f' }}>NEXT: {WIRE_NAMES[prog.nextColor]}</span>}
+          <span className="chip">
+            <Hearts total={p.strikeCap} left={p.strikeCap - prog.strikes} />
+          </span>
         </>
       );
   }
@@ -262,7 +374,31 @@ export function objectiveOf(level: LevelRow | null | undefined, now: number): st
     case 'valves':
       return prog.allInSince > 0 ? 'Hold every gauge green' : 'Hold a valve to raise it';
     case 'stations':
-      return prog.since > 0 ? 'Stay on the station — leaving early is a strike' : `Go to station ${Math.min(prog.next + 1, p.stations.length)}`;
+      return stationsRevealed(p, (now - (p.playAt ?? 0)) / 1000)
+        ? 'MEMORIZE where every number is — they are about to vanish'
+        : prog.since > 0
+          ? 'Stay on the stop — leaving early is a strike'
+          : `From memory: go to stop ${Math.min(prog.next + 1, p.stations.length)}`;
+    case 'echo':
+      return prog.phase === 'show' ? 'Watch the pads light up' : prog.since > 0 ? 'Hold still on the pad' : `Repeat the sequence — pad ${prog.pos + 1} of ${prog.len}`;
+    case 'crane':
+      return prog.since > 0 ? 'Releasing — keep holding the lever' : 'Hold the lever when the block is over the stack';
+    case 'spotlight':
+      return prog.outside ? 'GET BACK IN THE LIGHT — health is draining' : 'Stay inside the walking light';
+    case 'sheep':
+      return prog.inSince > 0 ? 'All penned — keep them in!' : 'Get behind a sheep to push it toward the pen';
+    case 'ice':
+      return prog.since > 0 ? 'Stopping… hold it' : `Slide to gate ${Math.min(prog.next + 1, p.gates.length)} and come to a dead stop inside`;
+    case 'plank':
+      return prog.since > 0 ? 'Hold perfectly still' : `Hold still on plank ${Math.min(prog.next + 1, p.tiles.length)}`;
+    case 'seesaw':
+      return 'Cursor left/right tilts the board — roll the ball into the pocket slowly';
+    case 'belts':
+      return now < prog.frozenUntil ? 'Zapped! Back to the checkpoint' : 'Ride the belts to the EXIT — avoid the red hazards';
+    case 'needle':
+      return now < prog.frozenUntil ? 'Ouch! Line up again' : `Thread the moving gap in wall ${Math.min(prog.next + 1, p.walls.length)}`;
+    case 'wires':
+      return prog.nextColor >= 0 ? (prog.since > 0 ? 'Hold on it…' : `Hold on the ${WIRE_NAMES[prog.nextColor]} node — nothing else`) : 'All wired!';
   }
   return '';
 }

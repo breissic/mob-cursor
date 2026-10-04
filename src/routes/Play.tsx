@@ -48,7 +48,8 @@ export default function Play() {
   const idHex = identity?.toHexString();
   useSubscribe(() => (identity ? [tables.player.where(r => r.identity.eq(identity))] : null), [idHex]);
   const me = useRows(c => c.db.player, 200).find(p => identity && p.identity.isEqual(identity));
-  const joined = !!me && me.connected;
+  const [left, setLeft] = useState(false);
+  const joined = !!me && me.connected && !left;
   const roomId = joined ? me.roomId : null;
 
   // Joined: everything the pad draws, scoped to our room. Phones never subscribe
@@ -89,6 +90,9 @@ export default function Play() {
       /* ignore */
     }
   }, [joined]);
+  useEffect(() => {
+    if (!me) setLeft(false);
+  }, [me]);
 
   // Locked phones get marked "gone" after a minute idle. When this page comes
   // back (unlock / tab switch / reload), quietly rejoin with the same name.
@@ -116,6 +120,18 @@ export default function Play() {
       document.removeEventListener('visibilitychange', rejoin);
     };
   }, [conn, status]);
+
+  // Back to the menu: forget the auto-rejoin flag first so the visibility hook
+  // cannot sneak us back in, then ask the server to drop us from the room.
+  const leave = () => {
+    try {
+      localStorage.setItem(JOINED_KEY, '0');
+    } catch {
+      /* ignore */
+    }
+    setLeft(true);
+    conn?.reducers.leave({}).catch(() => {});
+  };
 
   const saveName = () => {
     try {
@@ -233,10 +249,11 @@ export default function Play() {
     );
   }
 
-  return <Remote conn={conn!} me={me} room={room} selfKey={ghostKey(identity!.toHexString())} />;
+  return <Remote conn={conn!} me={me} room={room} selfKey={ghostKey(identity!.toHexString())} onLeave={leave} />;
 }
 
-function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow; room: RoomRow; selfKey: number }) {
+function Remote({ conn, me, room, selfKey, onLeave }: { conn: DbConnection; me: PlayerRow; room: RoomRow; selfKey: number; onLeave: () => void }) {
+  const [boardOpen, setBoardOpen] = useState(false);
   const roomId = room.id;
   const color = me.color;
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -310,9 +327,9 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
 
   // Haptics + sound + flash on big moments (our room only; a room switch can race the subscription).
   useEffect(() => {
-    const onFx = (_c: unknown, row: { roomId: number; kind: string }) => {
+    const onFx = (_c: unknown, row: { roomId: number; kind: string; who: string }) => {
       if (row.roomId !== roomId) return;
-      if (row.kind !== 'vote' && soundRef.current) sfx(row.kind);
+      if (row.kind !== 'vote' && soundRef.current) sfx(row.kind, row.who);
       const v: Record<string, number | number[]> = {
         mine: [90, 40, 90],
         wall: [60, 30, 60],
@@ -405,7 +422,7 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
       const cur = conn.db.cursor.id.find(roomId);
       const cfg = conn.db.config.id.find(0);
       if (cur && cfg) {
-        const phys = { ...cursorPhysics(running?.kind, cfg), tickHz: cfg.tickHz };
+        const phys = { ...cursorPhysics(running?.kind, cfg), tickHz: cfg.tickHz, level: running && cache ? cache.view : null };
         rc = smoother.step(dt, phys, running && cache ? cursorHoldUntilMs(cache.view) : 0);
       }
 
@@ -577,23 +594,33 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
               nextIn={config?.autoAdvance ? Math.max(0, Math.ceil((endedMs + 10000 - now) / 1000)) : null}
             />
           )}
+          {/* Leaderboard: a drawer on the side so it never eats pad space. */}
+          <aside className={`board-drawer ${boardOpen ? 'open' : ''}`} onPointerDown={e => e.stopPropagation()} onPointerMove={e => e.stopPropagation()}>
+            <button type="button" className="drawer-tab" onClick={() => setBoardOpen(o => !o)} aria-expanded={boardOpen} title="Leaderboard">
+              <span>{boardOpen ? '▶' : '◀'}</span>
+              <span className="tab-label">RANK #{Math.max(1, myRank + 1)}</span>
+            </button>
+            <ol className="board compact phone-board">
+              {shown.map(p => {
+                const i = board.indexOf(p);
+                return (
+                  <li key={p.identity.toHexString()} className={`${i === 0 && p.score > 0 ? 'top1' : ''} ${p.identity.isEqual(me.identity) ? 'me' : ''}`}>
+                    <span className="rank">{i + 1}</span>
+                    <span className="swatch" style={{ background: p.color }} />
+                    <span className="name">{p.name}</span>
+                    <b>{p.score}</b>
+                  </li>
+                );
+              })}
+              {shown.length === 0 && <li>nobody online yet…</li>}
+            </ol>
+          </aside>
         </div>
-        <ol className="board compact phone-board">
-          {shown.map(p => {
-            const i = board.indexOf(p);
-            return (
-              <li key={p.identity.toHexString()} className={`${i === 0 && p.score > 0 ? 'top1' : ''} ${p.identity.isEqual(me.identity) ? 'me' : ''}`}>
-                <span className="rank">{i + 1}</span>
-                <span className="swatch" style={{ background: p.color }} />
-                <span className="name">{p.name}</span>
-                <b>{p.score}</b>
-              </li>
-            );
-          })}
-          {shown.length === 0 && <li>nobody online yet…</li>}
-        </ol>
       </Win>
       <div className="phone-foot">
+        <button type="button" className="leave-btn" onClick={onLeave} title="Leave this room and go back to the menu">
+          ◀ LEAVE
+        </button>
         <span>
           ROOM <b>{room.code}</b> · {room.players} playing · drag = pull the cursor · {sent}/s
         </span>

@@ -20,10 +20,20 @@ export type LevelKind =
   | 'hunt'
   | 'valves'
   | 'stations'
+  | 'echo'
+  | 'crane'
+  | 'spotlight'
+  | 'sheep'
+  | 'ice'
+  | 'plank'
+  | 'seesaw'
+  | 'belts'
+  | 'needle'
+  | 'wires'
   | 'vote';
 /** A minigame the mob can play (everything but the lobby and the picker). */
 export type PlayKind = Exclude<LevelKind, 'lobby' | 'vote'>;
-/** Every playable game; the picker shows one card per entry, in this order. */
+/** Every playable game (the full catalog). The picker shows a random PICK_CARDS-card subset of it. */
 export const LEVEL_ROTATION: PlayKind[] = [
   'targets',
   'maze',
@@ -37,6 +47,16 @@ export const LEVEL_ROTATION: PlayKind[] = [
   'hunt',
   'valves',
   'stations',
+  'echo',
+  'crane',
+  'spotlight',
+  'sheep',
+  'ice',
+  'plank',
+  'seesaw',
+  'belts',
+  'needle',
+  'wires',
 ];
 export const isPlayKind = (k: string | null | undefined): k is PlayKind => (LEVEL_ROTATION as string[]).includes(k ?? '');
 
@@ -433,11 +453,94 @@ export const MODE_SETTINGS: Record<PlayKind, SettingDef[]> = {
     S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   stations: [
-    S('stations', 'Stations', 'more stops to visit in order, longer stage', 8, 2, 40, 1),
+    S('stations', 'Stations', 'more stops to remember and visit in order, longer stage', 5, 2, 40, 1),
+    S('revealS', 'Numbers shown for (s)', 'the numbers stay visible longer before they hide', 5, 0, 60, 0.5),
     S('dwellS', 'Dwell per station (s)', 'must sit on each station longer', 2, 0.5, 10, 0.1),
     S('r', 'Station radius', 'bigger, easier stations', 0.9, 0.3, 3, 0.05),
     S('skips', 'Early leaves allowed', 'more half-finished stops allowed before the stage fails', 3, 1, 50, 1),
     S('secs', 'Time limit (s)', 'more time before the stage fails', 75, 30, 600, 5),
+  ],
+  echo: [
+    S('pads', 'Pads', 'more pads to remember', 4, 3, 8, 1),
+    S('startLen', 'First sequence length', 'longer opening sequence', 2, 1, 6, 1),
+    S('rounds', 'Rounds to win', 'more rounds (each one pad longer), longer stage', 5, 1, 12, 1),
+    S('showMs', 'Flash per pad (ms)', 'slower, easier show', 700, 250, 2000, 50),
+    S('dwellMs', 'Dwell per pad (ms)', 'must hold each pad longer', 600, 200, 3000, 50),
+    S('faults', 'Fault cap', 'more wrong pads / early leaves allowed before the stage fails', 4, 1, 30, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  crane: [
+    S('periodS', 'Swing period (s)', 'slower swing, easier timing', 3, 1, 8, 0.1),
+    S('tol', 'Alignment tolerance', 'a wider aligned zone', 0.5, 0.1, 2, 0.05),
+    S('dwellMs', 'Release dwell (ms)', 'must hold the lever longer before the drop', 500, 100, 3000, 50),
+    S('target', 'Blocks to stack', 'taller tower, longer stage', 8, 2, 20, 1),
+    S('blockW', 'First block width', 'wider blocks forgive more misses', 3, 1, 6, 0.1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  spotlight: [
+    S('lanes', 'Path lanes', 'longer walk for the light', 3, 1, 5, 1),
+    S('speed', 'Light speed (u/s)', 'light moves faster', 0.5, 0.2, 2, 0.05),
+    S('radius', 'Light radius', 'bigger light, easier to stay inside', 1.4, 0.5, 3, 0.1),
+    S('hp', 'Health (s outside)', 'more seconds allowed outside the light', 8, 1, 60, 1),
+    S('decoy', 'Decoy light', '1 = a second light that does not count', 0, 0, 1, 1),
+  ],
+  sheep: [
+    S('n', 'Sheep', 'more sheep to herd', 3, 1, 8, 1),
+    S('wander', 'Wander speed (u/s)', 'sheep roam faster', 0.6, 0.1, 3, 0.05),
+    S('pushR', 'Push radius', 'the cursor nudges sheep from further away', 1.6, 0.5, 4, 0.1),
+    S('penW', 'Pen width', 'bigger pen', 4, 2, 8, 0.5),
+    S('penH', 'Pen height', 'bigger pen', 3, 1.5, 6, 0.5),
+    S('holdS', 'Hold (s)', 'all sheep must stay penned longer', 8, 2, 60, 1),
+    S('escapes', 'Escape cap', 'more escapes allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  ice: [
+    S('gates', 'Gates', 'more gates to stop in, longer stage', 6, 2, 20, 1),
+    S('r', 'Gate radius', 'bigger gates, easier to stop in', 1.0, 0.3, 3, 0.05),
+    S('slide', 'Slide', 'the cursor keeps more of its speed (slipperier)', 0.6, 0, 0.95, 0.05),
+    S('restSpeed', 'Rest speed (u/s)', 'may still be moving this fast and count as stopped', 0.6, 0.1, 3, 0.1),
+    S('restMs', 'Rest time (ms)', 'must sit still longer', 700, 100, 3000, 50),
+    S('faults', 'Fault cap', 'more slide-throughs allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  plank: [
+    S('tiles', 'Bridge tiles', 'longer bridge, longer stage', 8, 2, 24, 1),
+    S('fillMs', 'Fill per tile (ms)', 'each tile takes longer to set', 2500, 300, 10000, 100),
+    S('deadband', 'Stillness (u/s)', 'may move this fast while a tile fills', 0.8, 0.1, 4, 0.1),
+    S('shove', 'Sideways shove (u/s)', 'a constant push the crowd must lean against', 0, 0, 2, 0.05),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  seesaw: [
+    S('mass', 'Ball weight', 'heavier ball reacts slower to the tilt', 1, 0.5, 4, 0.1),
+    S('pocketW', 'Pocket width', 'wider pocket, easier catch', 1.4, 0.4, 4, 0.1),
+    S('balls', 'Balls', 'more balls on the board at once', 1, 1, 3, 1),
+    S('target', 'Pockets to win', 'more pockets needed, longer stage', 5, 1, 30, 1),
+    S('faults', 'Fault cap', 'more balls off the end allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  belts: [
+    S('beltCols', 'Belt columns', 'more belts between the start and the exit', 7, 2, 12, 1),
+    S('speed', 'Belt speed (u/s)', 'belts drag the cursor faster', 1.2, 0.2, 5, 0.1),
+    S('hazards', 'Loose hazards', 'more hazard cells in the middle of the belts', 3, 0, 20, 1),
+    S('reverseS', 'Reverse timer (s)', '0 = never; else belts flip direction this often', 0, 0, 30, 1),
+    S('faults', 'Fault cap', 'more hazard hits allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  needle: [
+    S('walls', 'Walls', 'more walls to thread, longer stage', 6, 2, 14, 1),
+    S('gapH', 'Gap height', 'bigger opening', 2.2, 0.6, 5, 0.1),
+    S('periodS', 'Gap period (s)', 'gaps move slower', 4, 1, 12, 0.1),
+    S('amp', 'Gap travel', 'gaps sweep further up and down', 2.4, 0, 3.5, 0.1),
+    S('faults', 'Fault cap', 'more wall touches allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
+  ],
+  wires: [
+    S('order', 'Wires in the order', 'longer secret order, longer stage', 6, 2, 10, 1),
+    S('decoys', 'Decoy colors', 'extra nodes whose color is never asked for', 0, 0, 4, 1),
+    S('r', 'Node radius', 'bigger nodes, easier dwell', 0.8, 0.3, 2, 0.05),
+    S('dwellMs', 'Dwell (ms)', 'must hold each node longer', 900, 200, 4000, 50),
+    S('strikes', 'Strike cap', 'more wrong nodes allowed before the stage fails', 3, 1, 30, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 30, 600, 5),
   ],
 };
 
@@ -467,7 +570,17 @@ export const STAGE_RULES: Record<PlayKind, Record<string, StageRule>> = {
   keyboard: { dwellMs: { mul: [0.82, 0.68] }, typos: { add: [-1, -2] }, secs: { add: [15, 30] } },
   hunt: { finds: { add: [1, 2] }, radius: { mul: [0.83, 0.67] }, dwellS: { add: [0.5, 1] }, noise: { add: [0.04, 0.07] }, decoys: { add: [1, 2] }, traps: { add: [0, -1] }, secs: { add: [15, 30] } },
   valves: { valves: { add: [1, 2] }, drift: { add: [0.005, 0.008] }, holdS: { add: [2, 5] }, secs: { add: [15, 30] } },
-  stations: { stations: { add: [2, 4] }, dwellS: { mul: [0.83, 0.73] }, r: { mul: [0.89, 0.78] }, skips: { add: [0, -1] }, secs: { add: [10, 20] } },
+  stations: { stations: { add: [1, 3] }, revealS: { mul: [0.8, 0.6] }, dwellS: { mul: [0.83, 0.73] }, r: { mul: [0.89, 0.78] }, skips: { add: [0, -1] }, secs: { add: [10, 20] } },
+  echo: { pads: { add: [1, 2] }, rounds: { add: [1, 2] }, showMs: { mul: [0.85, 0.7] }, dwellMs: { mul: [0.85, 0.7] }, faults: { add: [0, -1] }, secs: { add: [20, 40] } },
+  crane: { periodS: { mul: [0.8, 0.65] }, tol: { mul: [0.8, 0.65] }, target: { add: [2, 4] }, secs: { add: [20, 40] } },
+  spotlight: { lanes: { add: [0, 1] }, speed: { add: [0.1, 0.15] }, radius: { mul: [0.85, 0.7] }, decoy: { add: [0, 1] } },
+  sheep: { n: { add: [1, 2] }, wander: { add: [0.2, 0.4] }, penW: { add: [-0.5, -1] }, penH: { add: [-0.5, -0.5] }, holdS: { add: [2, 4] }, secs: { add: [20, 40] } },
+  ice: { gates: { add: [2, 4] }, r: { mul: [0.85, 0.7] }, slide: { add: [0.15, 0.25] }, faults: { add: [0, -1] }, secs: { add: [20, 40] } },
+  plank: { tiles: { add: [3, 6] }, deadband: { mul: [0.75, 0.55] }, shove: { add: [0, 0.35] }, secs: { add: [20, 40] } },
+  seesaw: { mass: { add: [0.5, 1] }, pocketW: { mul: [0.8, 0.65] }, balls: { add: [0, 1] }, target: { add: [1, 2] }, secs: { add: [20, 40] } },
+  belts: { beltCols: { add: [2, 4] }, speed: { add: [0.4, 0.8] }, hazards: { add: [2, 4] }, reverseS: { add: [0, 6] }, secs: { add: [20, 40] } },
+  needle: { walls: { add: [2, 4] }, gapH: { mul: [0.82, 0.68] }, periodS: { mul: [0.8, 0.65] }, faults: { add: [0, -1] }, secs: { add: [20, 40] } },
+  wires: { order: { add: [1, 2] }, decoys: { add: [1, 2] }, dwellMs: { mul: [0.85, 0.7] }, secs: { add: [20, 40] } },
 };
 
 function snap(def: SettingDef, v: number) {
@@ -532,6 +645,7 @@ export function stageSpec(kind: PlayKind, stage: number, base: ModeSettings = se
 /** Deadline for a stage in seconds: `secs` where the mode has one, else derived from its work. */
 export function stageSeconds(kind: PlayKind, sp: ModeSettings): number {
   if (kind === 'potato') return sp.rounds * sp.fuseS + 2;
+  if (kind === 'spotlight') return Math.ceil(pathLength(spotlightPath(sp.lanes)) / sp.speed) + 5;
   return sp.secs;
 }
 
@@ -592,7 +706,7 @@ export const VOTE_START = { x: WORLD_W / 2, y: 1.2 };
  * Level deadlines and in-progress timers are wall-clock unix ms. When the tick
  * resumes after a pause, every known timer field moves with the level's playAt.
  */
-const TIMER_KEYS = ['frozenUntil', 'flipAt', 'litAt', 'at', 'until', 'fuseAt', 'stopAt', 'safeUntil', 'since', 'endsAt', 'nextAutoAt', 'dwellSince', 'allInSince', 'barsAt'];
+const TIMER_KEYS = ['frozenUntil', 'flipAt', 'litAt', 'at', 'until', 'fuseAt', 'stopAt', 'safeUntil', 'since', 'endsAt', 'nextAutoAt', 'dwellSince', 'allInSince', 'barsAt', 'trapSince', 'showAt', 'inSince', 'wrongSince'];
 export function shiftLevelTimes<T extends Record<string, unknown>>(prog: T, dMs: number): T {
   const out: Record<string, unknown> = { ...prog };
   for (const k of TIMER_KEYS) {
@@ -1589,8 +1703,8 @@ export function valvesStep(p: ValvesParams, prog: ValvesProgress, nowMs: number,
 // Stations: visit the numbered stops in order, dwelling on each.
 // ---------------------------------------------------------------------------
 
-/** skipCap: early leaves allowed before the stage is lost. */
-export type StationsParams = { stations: Vec[]; r: number; dwellS: number; skipCap: number };
+/** skipCap: early leaves allowed before the stage is lost. revealMs: the numbers are visible this long after play starts, then the crowd goes from memory. */
+export type StationsParams = { stations: Vec[]; r: number; dwellS: number; skipCap: number; revealMs: number };
 /** next: station to visit. since: when the cursor entered it (0 = not on it). */
 export type StationsProgress = { next: number; since: number; cancels: number };
 /** A started dwell survives drifting this far past the rim; beyond it the stop is cancelled. */
@@ -1598,7 +1712,12 @@ export const STATION_SLACK = 1.5;
 
 export function makeStations(rand: Rand, sp: ModeSettings): { params: StationsParams; progress: StationsProgress } {
   const stations = scatter(rand, Math.max(1, Math.round(sp.stations)), 3.5, 1.1, 2 * sp.r + 0.4).map(s => ({ x: s.x, y: s.y }));
-  return { params: { stations, r: sp.r, dwellS: sp.dwellS, skipCap: sp.skips }, progress: { next: 0, since: 0, cancels: 0 } };
+  return { params: { stations, r: sp.r, dwellS: sp.dwellS, skipCap: sp.skips, revealMs: Math.round(sp.revealS * 1000) }, progress: { next: 0, since: 0, cancels: 0 } };
+}
+
+/** Are the station numbers still showing? (`tSec` = seconds since play started.) */
+export function stationsRevealed(p: StationsParams, tSec: number): boolean {
+  return tSec * 1000 < (p.revealMs ?? 0);
 }
 
 /**
@@ -1621,6 +1740,740 @@ export function stationsStep(p: StationsParams, prog: StationsProgress, nowMs: n
   }
   if (prog.since) return { prog: { ...prog, since: 0, cancels: prog.cancels + 1 }, event: 'cancel', won: false };
   return { prog, event: null, won: false };
+}
+
+// ---------------------------------------------------------------------------
+// Picker sampling: a fresh random subset of the catalog each time.
+// ---------------------------------------------------------------------------
+
+/** Cards on the picker. */
+export const PICK_CARDS = 6;
+
+/**
+ * Sample `n` games uniformly without replacement (never the one that just
+ * finished); the sampled order is already a shuffle. Pure: feed it ctx.random.
+ */
+export function pickCards(rand: Rand, lastKind: string | undefined, n = PICK_CARDS): PlayKind[] {
+  const arr = LEVEL_ROTATION.filter(k => k !== lastKind);
+  const out: PlayKind[] = [];
+  for (let i = 0; i < Math.min(n, arr.length); i++) {
+    const j = i + (Math.floor(rand() * (arr.length - i)) % (arr.length - i));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    out.push(arr[i]);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Shared bits for the newer modes
+// ---------------------------------------------------------------------------
+
+/** Deterministic 32-bit LCG step for state that lives in a progress row (sheep wander). */
+export function lcg(seed: number): { seed: number; v: number } {
+  const s = (Math.imul(seed >>> 0, 1664525) + 1013904223) >>> 0;
+  return { seed: s, v: s / 4294967296 };
+}
+
+/** Serpentine polyline: `lanes` horizontal runs between `top` and `bottom`, joined by the hops between them. */
+export function serpentine(lanes: number, top: number, bottom: number, x0 = 1, x1 = WORLD_W - 1): Vec[] {
+  const n = Math.max(1, Math.round(lanes));
+  const pts: Vec[] = [];
+  for (let i = 0; i < n; i++) {
+    const y = top + ((i + 0.5) / n) * (bottom - top);
+    const [a, b] = i % 2 === 0 ? [x0, x1] : [x1, x0];
+    pts.push({ x: a, y }, { x: b, y });
+  }
+  return pts;
+}
+
+/** Entering a wrong thing counts after this long inside it, so a cursor sliding across is not punished. */
+export const WRONG_MS = 300;
+/** A started dwell survives drifting this far past the rim (x radius). */
+export const DWELL_SLACK = 1.35;
+
+function keepWorld(b: Body): Body {
+  let { x, y, vx, vy } = b;
+  if (x < 0 || x > WORLD_W) {
+    x = clamp(x, 0, WORLD_W);
+    vx = -vx * 0.3;
+  }
+  if (y < 0 || y > WORLD_H) {
+    y = clamp(y, 0, WORLD_H);
+    vy = -vy * 0.3;
+  }
+  return { x, y, vx, vy };
+}
+
+/**
+ * Extra motion some modes add AFTER integrate(): ice keeps part of the old
+ * velocity (slide), plank shoves sideways, belts drag. Shared with the client's
+ * cursor prediction so the drawn cursor and the server agree. Never touches the
+ * global damping/gain config.
+ */
+export function postIntegrate(kind: string | null | undefined, params: unknown, prev: Body, next: Body, dt: number, tSec: number): Body {
+  if (kind === 'ice') {
+    const k = clamp((params as IceParams).slide ?? 0, 0, 0.98);
+    if (k <= 0) return next;
+    const vx = next.vx + (prev.vx - next.vx) * k;
+    const vy = next.vy + (prev.vy - next.vy) * k;
+    return keepWorld({ x: prev.x + vx * dt, y: prev.y + vy * dt, vx, vy });
+  }
+  if (kind === 'plank') {
+    const s = (params as PlankParams).shove ?? 0;
+    return s ? keepWorld({ ...next, y: next.y + s * dt }) : next;
+  }
+  if (kind === 'belts') {
+    const d = beltDir(params as BeltsParams, prev.x, prev.y, tSec);
+    if (!d) return next;
+    const sp = (params as BeltsParams).speed;
+    return keepWorld({ ...next, x: next.x + d.x * sp * dt, y: next.y + d.y * sp * dt });
+  }
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Echo (Simon): watch the pads light up, then retrace the order.
+// ---------------------------------------------------------------------------
+
+export type EchoParams = { pads: Vec[]; r: number; startLen: number; rounds: number; showMs: number; dwellMs: number; faultCap: number };
+/**
+ * phase 'show': pad shown[showIdx-1] is lit until showAt; the next one lights at showAt.
+ * phase 'retrace': pos pads of this round retraced; onPad = pad being dwelt (-1 none, -2 just fired, leave first).
+ * shown is the public prefix of the secret sequence (revealed pad by pad as it lights).
+ */
+export type EchoProgress = {
+  round: number;
+  len: number;
+  phase: 'show' | 'retrace';
+  showIdx: number;
+  showAt: number;
+  shown: number[];
+  pos: number;
+  onPad: number;
+  since: number;
+  wrongSince: number;
+  faults: number;
+};
+export type EchoSecret = { seq: number[] };
+export type EchoEvent = 'flash' | 'go' | 'pad' | 'round' | 'fault' | null;
+/** Dark pause between the show and the retrace (and before each show). */
+export const ECHO_GAP_MS = 900;
+
+/** Pads on a ring in the middle of the field. */
+export function echoPads(n: number): Vec[] {
+  const k = Math.max(3, Math.round(n));
+  const cx = WORLD_W / 2;
+  const cy = 5.3;
+  const rx = 5.6;
+  const ry = 2.75;
+  return Array.from({ length: k }, (_, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / k;
+    return { x: +(cx + rx * Math.cos(a)).toFixed(2), y: +(cy + ry * Math.sin(a)).toFixed(2) };
+  });
+}
+
+export function makeEcho(rand: Rand, sp: ModeSettings, playAt: number): { params: EchoParams; progress: EchoProgress; secret: EchoSecret } {
+  const pads = echoPads(sp.pads);
+  const total = Math.max(1, Math.round(sp.startLen)) + Math.max(1, Math.round(sp.rounds)) - 1;
+  const seq: number[] = [];
+  for (let i = 0; i < total; i++) {
+    let v = Math.floor(rand() * pads.length) % pads.length;
+    if (seq.length && v === seq[seq.length - 1]) v = (v + 1) % pads.length; // no back-to-back repeats (a repeat needs a leave + re-enter)
+    seq.push(v);
+  }
+  const params: EchoParams = { pads, r: pads.length >= 7 ? 0.95 : 1.1, startLen: Math.round(sp.startLen), rounds: Math.round(sp.rounds), showMs: sp.showMs, dwellMs: sp.dwellMs, faultCap: sp.faults };
+  const progress: EchoProgress = { round: 1, len: params.startLen, phase: 'show', showIdx: 0, showAt: playAt + ECHO_GAP_MS, shown: [], pos: 0, onPad: -1, since: 0, wrongSince: 0, faults: 0 };
+  return { params, progress, secret: { seq } };
+}
+
+/** Pad currently lit during the show (-1 when dark). */
+export function echoLit(p: EchoParams, prog: EchoProgress, nowMs: number): number {
+  if (prog.phase !== 'show' || prog.showIdx === 0) return -1;
+  // Each pad is lit for the first ~70% of its slot, dark for the rest so repeats read as two flashes.
+  return nowMs < prog.showAt - p.showMs * 0.3 ? prog.shown[prog.showIdx - 1] : -1;
+}
+
+function echoRestart(prog: EchoProgress, nowMs: number, patch: Partial<EchoProgress>): EchoProgress {
+  return { ...prog, phase: 'show', showIdx: 0, showAt: nowMs + ECHO_GAP_MS, shown: [], pos: 0, onPad: -1, since: 0, wrongSince: 0, ...patch };
+}
+
+/** One tick. Returns the same `prog` when nothing changed. `pad` in the result is the pad an event happened on. */
+export function echoStep(p: EchoParams, prog: EchoProgress, secret: EchoSecret, nowMs: number, cur: Vec): { prog: EchoProgress; event: EchoEvent; pad: number; won: boolean } {
+  if (prog.phase === 'show') {
+    if (nowMs < prog.showAt) return { prog, event: null, pad: -1, won: false };
+    if (prog.showIdx < prog.len) {
+      const pad = secret.seq[prog.showIdx];
+      return { prog: { ...prog, shown: [...prog.shown, pad], showIdx: prog.showIdx + 1, showAt: nowMs + p.showMs }, event: 'flash', pad, won: false };
+    }
+    return { prog: { ...prog, phase: 'retrace', pos: 0, onPad: -1, since: 0, wrongSince: 0 }, event: 'go', pad: -1, won: false };
+  }
+  // Retrace.
+  let pad = p.pads.findIndex(q => dist(cur, q) <= p.r);
+  if (pad < 0 && prog.onPad >= 0 && dist(cur, p.pads[prog.onPad]) <= p.r * DWELL_SLACK) pad = prog.onPad;
+  const want = secret.seq[prog.pos];
+  if (pad === want) {
+    if (prog.onPad !== pad) return { prog: { ...prog, onPad: pad, since: nowMs, wrongSince: 0 }, event: null, pad, won: false };
+    if (nowMs - prog.since < p.dwellMs) return { prog, event: null, pad, won: false };
+    const pos = prog.pos + 1;
+    if (pos >= prog.len) {
+      if (prog.round >= p.rounds) return { prog: { ...prog, pos, onPad: -2, since: 0 }, event: 'round', pad, won: true };
+      return { prog: echoRestart(prog, nowMs, { round: prog.round + 1, len: prog.len + 1 }), event: 'round', pad, won: false };
+    }
+    return { prog: { ...prog, pos, onPad: -2, since: 0 }, event: 'pad', pad, won: false };
+  }
+  if (pad >= 0 && prog.onPad !== -2) {
+    // Wrong pad: a fault once the cursor has clearly settled on it.
+    if (!prog.wrongSince) return { prog: { ...prog, wrongSince: nowMs, onPad: -1, since: 0 }, event: null, pad, won: false };
+    if (nowMs - prog.wrongSince >= WRONG_MS) return { prog: echoRestart(prog, nowMs, { faults: prog.faults + 1 }), event: 'fault', pad, won: false };
+    return { prog, event: null, pad, won: false };
+  }
+  if (pad < 0 && prog.onPad >= 0 && prog.since > 0) {
+    // Left the right pad before the dwell finished.
+    return { prog: echoRestart(prog, nowMs, { faults: prog.faults + 1 }), event: 'fault', pad: prog.onPad, won: false };
+  }
+  if (pad < 0 && (prog.onPad !== -1 || prog.wrongSince !== 0 || prog.since !== 0)) return { prog: { ...prog, onPad: -1, since: 0, wrongSince: 0 }, event: null, pad: -1, won: false };
+  return { prog, event: null, pad: -1, won: false };
+}
+
+// ---------------------------------------------------------------------------
+// Crane: a block swings on a sine; hold the lever to drop it on the stack.
+// ---------------------------------------------------------------------------
+
+export type CraneParams = { periodS: number; amp: number; tol: number; dwellMs: number; target: number; lever: Rect; baseY: number; blockH: number; swingY: number };
+/** blocks[0] is the ground slab; height = blocks.length - 1. since: lever dwell start (0 none, -1 = fired, leave the lever first). */
+export type CraneProgress = { blocks: { x: number; w: number }[]; since: number; faults: number; toppled: boolean; lastDx: number };
+export type CraneEvent = 'drop' | 'miss' | 'topple' | null;
+
+export function makeCrane(sp: ModeSettings): { params: CraneParams; progress: CraneProgress } {
+  const target = Math.max(1, Math.round(sp.target));
+  const blockH = Math.min(0.55, 5.2 / target);
+  const params: CraneParams = {
+    periodS: sp.periodS,
+    amp: 5.5,
+    tol: sp.tol,
+    dwellMs: sp.dwellMs,
+    target,
+    lever: { x: WORLD_W / 2 - 1.3, y: 0.25, w: 2.6, h: 1.3 },
+    baseY: WORLD_H - 0.4,
+    blockH,
+    swingY: 2.5,
+  };
+  return { params, progress: { blocks: [{ x: WORLD_W / 2, w: sp.blockW }], since: 0, faults: 0, toppled: false, lastDx: 0 } };
+}
+
+/** Swinging block centre x at `tSec` seconds into play (public sine). */
+export const craneMarkerX = (p: CraneParams, tSec: number) => WORLD_W / 2 + p.amp * Math.sin((2 * Math.PI * Math.max(0, tSec)) / p.periodS);
+export const craneHeight = (prog: CraneProgress) => prog.blocks.length - 1;
+
+export function craneStep(p: CraneParams, prog: CraneProgress, nowMs: number, tSec: number, cur: Vec): { prog: CraneProgress; event: CraneEvent; won: boolean } {
+  const inside = inRect(p.lever, cur.x, cur.y);
+  if (!inside) return prog.since !== 0 ? { prog: { ...prog, since: 0 }, event: null, won: false } : { prog, event: null, won: false };
+  if (prog.since === -1) return { prog, event: null, won: false };
+  if (prog.since === 0) return { prog: { ...prog, since: nowMs }, event: null, won: false };
+  if (nowMs - prog.since < p.dwellMs) return { prog, event: null, won: false };
+  // Drop.
+  const top = prog.blocks[prog.blocks.length - 1];
+  const dx = craneMarkerX(p, tSec) - top.x;
+  const adx = Math.abs(dx);
+  if (adx >= top.w) return { prog: { ...prog, since: -1, toppled: true, lastDx: +dx.toFixed(2) }, event: 'topple', won: false };
+  if (adx <= p.tol) {
+    const blocks = [...prog.blocks, { x: top.x, w: top.w }];
+    return { prog: { ...prog, blocks, since: -1, lastDx: +dx.toFixed(2) }, event: 'drop', won: blocks.length - 1 >= p.target };
+  }
+  const blocks = [...prog.blocks, { x: +(top.x + dx / 2).toFixed(3), w: +(top.w - adx).toFixed(3) }];
+  return { prog: { ...prog, blocks, since: -1, faults: prog.faults + 1, lastDx: +dx.toFixed(2) }, event: 'miss', won: blocks.length - 1 >= p.target };
+}
+
+// ---------------------------------------------------------------------------
+// Spotlight: stay inside a light that walks a long path.
+// ---------------------------------------------------------------------------
+
+export type SpotlightParams = { path: Vec[]; length: number; speed: number; radius: number; hp: number; decoy: number };
+/** hp: seconds of health left; at: when hp was last settled; outside: draining right now. */
+export type SpotlightProgress = { hp: number; at: number; outside: boolean };
+export const SPOT_TOP = 1.7;
+/** The decoy runs this far ahead of the real light along the same path (wrapping). */
+export const SPOT_DECOY_LEAD = 3.5;
+
+export const spotlightPath = (lanes: number) => serpentine(lanes, SPOT_TOP + 0.4, WORLD_H - 0.6);
+export const spotS = (p: SpotlightParams, tSec: number) => clamp(p.speed * Math.max(0, tSec), 0, p.length);
+export const spotPos = (p: SpotlightParams, tSec: number) => pathPos(p.path, spotS(p, tSec));
+export const decoyPos = (p: SpotlightParams, tSec: number) => pathPos(p.path, (spotS(p, tSec) + SPOT_DECOY_LEAD) % Math.max(1e-6, p.length));
+/** Health at `nowMs`, accounting for a drain in progress. */
+export const spotHp = (prog: SpotlightProgress, nowMs: number) => (prog.outside ? Math.max(0, prog.hp - Math.max(0, nowMs - prog.at) / 1000) : prog.hp);
+
+export function makeSpotlight(sp: ModeSettings, playAt: number): { params: SpotlightParams; progress: SpotlightProgress } {
+  const path = spotlightPath(sp.lanes);
+  return { params: { path, length: pathLength(path), speed: sp.speed, radius: sp.radius, hp: sp.hp, decoy: sp.decoy }, progress: { hp: sp.hp, at: playAt, outside: false } };
+}
+
+export function spotlightStep(p: SpotlightParams, prog: SpotlightProgress, nowMs: number, tSec: number, cur: Vec): { prog: SpotlightProgress; event: 'out' | 'in' | null; won: boolean; lost: boolean } {
+  const inside = dist(cur, spotPos(p, tSec)) <= p.radius;
+  const hp = spotHp(prog, nowMs);
+  let out = prog;
+  let event: 'out' | 'in' | null = null;
+  if (inside && prog.outside) {
+    out = { hp: +hp.toFixed(3), at: nowMs, outside: false };
+    event = 'in';
+  } else if (!inside && !prog.outside) {
+    out = { hp: prog.hp, at: nowMs, outside: true };
+    event = 'out';
+  } else if (!inside) out = { hp: +hp.toFixed(3), at: nowMs, outside: true };
+  const lost = hp <= 0;
+  return { prog: out, event, won: !lost && spotS(p, tSec) >= p.length, lost };
+}
+
+// ---------------------------------------------------------------------------
+// Sheep: nudge wandering sheep into the pen and keep them there.
+// ---------------------------------------------------------------------------
+
+/** Sheep state at SheepProgress.at; moves linearly until turnAt (or a wall / the cursor). */
+export type Sheep = { x: number; y: number; vx: number; vy: number; turnAt: number; pushed: boolean; in: boolean };
+/** The pen is open on its left side (facing the field); its other three sides are fence. */
+export type SheepParams = { n: number; pen: Rect; pushR: number; wander: number; holdS: number; escapeCap: number };
+export type SheepProgress = { sheep: Sheep[]; at: number; seed: number; inSince: number; escapes: number };
+export type SheepEvent = { kind: 'in' | 'escape' | 'push'; i: number };
+
+export function makeSheep(rand: Rand, sp: ModeSettings, playAt: number): { params: SheepParams; progress: SheepProgress } {
+  const pen: Rect = { x: WORLD_W - 1 - sp.penW, y: (WORLD_H - sp.penH) / 2 + 0.8, w: sp.penW, h: sp.penH };
+  const n = Math.max(1, Math.round(sp.n));
+  let seed = Math.floor(rand() * 4294967295) >>> 0;
+  const sheep: Sheep[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = lcg(seed);
+    const b = lcg(a.seed);
+    const c = lcg(b.seed);
+    seed = c.seed;
+    const ang = a.v * Math.PI * 2;
+    sheep.push({
+      x: +(1.5 + b.v * (WORLD_W / 2 - 2)).toFixed(2),
+      y: +(2.5 + c.v * (WORLD_H - 3.2)).toFixed(2),
+      vx: +(Math.cos(ang) * sp.wander).toFixed(3),
+      vy: +(Math.sin(ang) * sp.wander).toFixed(3),
+      turnAt: playAt + 800 + Math.floor(a.v * 2000),
+      pushed: false,
+      in: false,
+    });
+  }
+  return { params: { n, pen, pushR: sp.pushR, wander: sp.wander, holdS: sp.holdS, escapeCap: sp.escapes }, progress: { sheep, at: playAt, seed, inSince: 0, escapes: 0 } };
+}
+
+/** Sheep positions at `nowMs` (linear from the stored state; walls are only applied on the server tick). */
+export function sheepAt(prog: SheepProgress, nowMs: number): Vec[] {
+  const dt = Math.max(0, nowMs - prog.at) / 1000;
+  return prog.sheep.map(s => ({ x: clamp(s.x + s.vx * dt, 0.3, WORLD_W - 0.3), y: clamp(s.y + s.vy * dt, 0.3, WORLD_H - 0.3) }));
+}
+
+const penInside = (pen: Rect, x: number, y: number) => inRect(pen, x, y);
+
+/**
+ * One tick (dt = seconds since the previous tick). Returns the same `prog` when
+ * no sheep turned, bounced, got pushed or crossed the pen line; otherwise the
+ * state is rebased to `nowMs`.
+ */
+export function sheepStep(p: SheepParams, prog: SheepProgress, nowMs: number, dt: number, cur: Vec): { prog: SheepProgress; events: SheepEvent[]; won: boolean } {
+  const events: SheepEvent[] = [];
+  const since = Math.max(0, nowMs - prog.at) / 1000;
+  const prevT = Math.max(0, since - dt);
+  let seed = prog.seed;
+  let changed = false;
+  let escapes = prog.escapes;
+  const next: Sheep[] = prog.sheep.map((s, i) => {
+    let { vx, vy, pushed } = s;
+    let inPen = s.in;
+    const px = s.x + s.vx * prevT;
+    const py = s.y + s.vy * prevT;
+    let nx = s.x + s.vx * since;
+    let ny = s.y + s.vy * since;
+    let turnAt = s.turnAt;
+    let dirty = false;
+    const speedBase = p.wander * (inPen ? 0.55 : 1);
+    // Cursor nearby: shove toward the pen (fast); leaving the push radius releases it.
+    const near = dist(cur, { x: nx, y: ny }) <= p.pushR;
+    if (near && !pushed) {
+      const tx = p.pen.x + p.pen.w * 0.6;
+      const ty = p.pen.y + p.pen.h / 2;
+      const d = Math.max(0.3, Math.hypot(tx - nx, ty - ny));
+      vx = ((tx - nx) / d) * p.wander * 1.8;
+      vy = ((ty - ny) / d) * p.wander * 1.8;
+      pushed = true;
+      turnAt = nowMs + 100000;
+      dirty = true;
+      events.push({ kind: 'push', i });
+    } else if (!near && pushed && dist(cur, { x: nx, y: ny }) > p.pushR * 1.25) {
+      pushed = false;
+      turnAt = nowMs; // pick a fresh wander heading below
+    }
+    if (!pushed && nowMs >= turnAt) {
+      const a = lcg(seed);
+      const b = lcg(a.seed);
+      seed = b.seed;
+      const ang = a.v * Math.PI * 2;
+      vx = Math.cos(ang) * speedBase;
+      vy = Math.sin(ang) * speedBase;
+      turnAt = nowMs + 900 + Math.floor(b.v * 2600);
+      dirty = true;
+    }
+    // World walls.
+    if (nx < 0.3 || nx > WORLD_W - 0.3) {
+      nx = clamp(nx, 0.3, WORLD_W - 0.3);
+      vx = -Math.abs(vx) * Math.sign(nx - WORLD_W / 2) || -vx;
+      dirty = true;
+    }
+    if (ny < 0.3 || ny > WORLD_H - 0.3) {
+      ny = clamp(ny, 0.3, WORLD_H - 0.3);
+      vy = -Math.abs(vy) * Math.sign(ny - WORLD_H / 2) || -vy;
+      dirty = true;
+    }
+    // Pen line crossings: only the open (left) side lets a sheep through.
+    const wasIn = penInside(p.pen, px, py);
+    const nowIn = penInside(p.pen, nx, ny);
+    if (wasIn !== nowIn) {
+      const throughGate = (wasIn ? nx : px) < p.pen.x && py >= p.pen.y && py <= p.pen.y + p.pen.h && ny >= p.pen.y && ny <= p.pen.y + p.pen.h;
+      if (throughGate) {
+        inPen = nowIn;
+        dirty = true;
+        if (nowIn) events.push({ kind: 'in', i });
+        else {
+          escapes++;
+          events.push({ kind: 'escape', i });
+        }
+      } else {
+        // Hit a fence: undo the move on the axis that crossed and bounce.
+        const crossedX = (px < p.pen.x || px > p.pen.x + p.pen.w) !== (nx < p.pen.x || nx > p.pen.x + p.pen.w);
+        if (crossedX) {
+          nx = px;
+          vx = -vx;
+        } else {
+          ny = py;
+          vy = -vy;
+        }
+        dirty = true;
+      }
+    } else if (inPen !== nowIn) {
+      inPen = nowIn;
+      dirty = true;
+    }
+    if (dirty) changed = true;
+    return { x: +nx.toFixed(3), y: +ny.toFixed(3), vx: +vx.toFixed(3), vy: +vy.toFixed(3), turnAt, pushed, in: inPen };
+  });
+  const allIn = next.every(s => s.in);
+  let inSince = prog.inSince;
+  if (allIn && !inSince) {
+    inSince = nowMs;
+    changed = true;
+  } else if (!allIn && inSince) {
+    inSince = 0;
+    changed = true;
+  }
+  const won = allIn && inSince > 0 && nowMs - inSince >= p.holdS * 1000;
+  if (!changed) return { prog, events, won };
+  return { prog: { sheep: next, at: nowMs, seed, inSince, escapes }, events, won };
+}
+
+// ---------------------------------------------------------------------------
+// Ice: a slippery cursor must come to rest inside each gate in order.
+// ---------------------------------------------------------------------------
+
+export type IceParams = { gates: Vec[]; r: number; slide: number; restSpeed: number; restMs: number; faultCap: number };
+/** since: when the cursor went still inside the gate (0 = moving/outside); inGate: currently inside the next gate. */
+export type IceProgress = { next: number; since: number; inGate: boolean; faults: number };
+
+export function makeIce(rand: Rand, sp: ModeSettings): { params: IceParams; progress: IceProgress } {
+  const gates = scatter(rand, Math.max(1, Math.round(sp.gates)), 4.5, 1.3, 2 * sp.r + 0.6).map(g => ({ x: g.x, y: g.y }));
+  return { params: { gates, r: sp.r, slide: sp.slide, restSpeed: sp.restSpeed, restMs: sp.restMs, faultCap: sp.faults }, progress: { next: 0, since: 0, inGate: false, faults: 0 } };
+}
+
+export function iceStep(p: IceParams, prog: IceProgress, nowMs: number, cur: Body): { prog: IceProgress; event: 'gate' | 'slide' | null; won: boolean } {
+  const g = p.gates[prog.next];
+  if (!g) return { prog, event: null, won: true };
+  const inside = dist(cur, g) <= p.r;
+  if (inside) {
+    const still = Math.hypot(cur.vx, cur.vy) <= p.restSpeed;
+    if (!still) return prog.since || !prog.inGate ? { prog: { ...prog, since: 0, inGate: true }, event: null, won: false } : { prog, event: null, won: false };
+    if (!prog.since) return { prog: { ...prog, since: nowMs, inGate: true }, event: null, won: false };
+    if (nowMs - prog.since < p.restMs) return { prog, event: null, won: false };
+    const next = prog.next + 1;
+    return { prog: { ...prog, next, since: 0, inGate: false }, event: 'gate', won: next >= p.gates.length };
+  }
+  if (prog.inGate) return { prog: { ...prog, since: 0, inGate: false, faults: prog.faults + 1 }, event: 'slide', won: false };
+  return { prog, event: null, won: false };
+}
+
+// ---------------------------------------------------------------------------
+// Plank: set each bridge tile by holding still on it.
+// ---------------------------------------------------------------------------
+
+export type PlankParams = { tiles: Rect[]; fillMs: number; deadband: number; shove: number };
+/** since: when the still-fill of tile `next` started (0 = not filling). */
+export type PlankProgress = { next: number; since: number; wipes: number };
+
+export function makePlank(sp: ModeSettings): { params: PlankParams; progress: PlankProgress } {
+  const n = Math.max(1, Math.round(sp.tiles));
+  const w = 13.6 / n;
+  const h = 1.5;
+  const tiles: Rect[] = Array.from({ length: n }, (_, i) => ({ x: +(1.2 + i * w).toFixed(3), y: +(4.6 + Math.sin(i * 0.95) * 1.5 - h / 2).toFixed(3), w: +w.toFixed(3), h }));
+  return { params: { tiles, fillMs: sp.fillMs, deadband: sp.deadband, shove: sp.shove }, progress: { next: 0, since: 0, wipes: 0 } };
+}
+
+export const plankFill = (p: PlankParams, prog: PlankProgress, nowMs: number) => (prog.since ? clamp((nowMs - prog.since) / p.fillMs, 0, 1) : 0);
+
+export function plankStep(p: PlankParams, prog: PlankProgress, nowMs: number, cur: Body): { prog: PlankProgress; event: 'tile' | 'wipe' | 'cancel' | null; won: boolean } {
+  const t = p.tiles[prog.next];
+  if (!t) return { prog, event: null, won: true };
+  const inside = inRect(t, cur.x, cur.y);
+  const still = Math.hypot(cur.vx, cur.vy) < p.deadband;
+  if (inside && still) {
+    if (!prog.since) return { prog: { ...prog, since: nowMs }, event: null, won: false };
+    if (nowMs - prog.since < p.fillMs) return { prog, event: null, won: false };
+    const next = prog.next + 1;
+    return { prog: { ...prog, next, since: 0 }, event: 'tile', won: next >= p.tiles.length };
+  }
+  if (prog.since) return { prog: { ...prog, since: 0, wipes: prog.wipes + 1 }, event: inside ? 'wipe' : 'cancel', won: false };
+  return { prog, event: null, won: false };
+}
+
+// ---------------------------------------------------------------------------
+// Seesaw: tilt the board with cursor x, roll the ball into the pocket.
+// ---------------------------------------------------------------------------
+
+export type SeesawParams = { pivot: Vec; halfLen: number; maxAngle: number; mass: number; pocketW: number; target: number; faultCap: number; g: number };
+/** s: position along the board from the pivot (-halfLen..halfLen); pocket: this ball's pocket position. */
+export type SeesawBall = { s: number; v: number; pocket: number };
+export type SeesawProgress = { angle: number; balls: SeesawBall[]; pockets: number; faults: number };
+export type SeesawEvent = { kind: 'pocket' | 'fall'; i: number };
+export const SEESAW_BALL_R = 0.32;
+
+function seesawPocket(rand: Rand, side: number, halfLen: number) {
+  return +(side * (1.6 + rand() * (halfLen - 2.4))).toFixed(2);
+}
+
+export function makeSeesaw(rand: Rand, sp: ModeSettings): { params: SeesawParams; progress: SeesawProgress } {
+  const halfLen = 6;
+  const params: SeesawParams = { pivot: { x: WORLD_W / 2, y: 6 }, halfLen, maxAngle: 0.38, mass: sp.mass, pocketW: sp.pocketW, target: Math.round(sp.target), faultCap: sp.faults, g: 4.5 };
+  const balls: SeesawBall[] = Array.from({ length: Math.max(1, Math.round(sp.balls)) }, (_, i) => ({ s: 0, v: 0, pocket: seesawPocket(rand, i % 2 === 0 ? 1 : -1, halfLen) }));
+  return { params, progress: { angle: 0, balls, pockets: 0, faults: 0 } };
+}
+
+/** World position of a point `s` along the board (ball centres sit on top of it). */
+export function seesawPoint(p: SeesawParams, angle: number, s: number, lift = 0): Vec {
+  return { x: p.pivot.x + s * Math.cos(angle) - lift * Math.sin(angle) * -1, y: p.pivot.y + s * Math.sin(angle) - lift * Math.cos(angle) };
+}
+
+export function seesawStep(p: SeesawParams, prog: SeesawProgress, dt: number, cur: Vec, rand: Rand): { prog: SeesawProgress; events: SeesawEvent[]; won: boolean } {
+  const target = clamp((cur.x - p.pivot.x) / p.halfLen, -1, 1) * p.maxAngle;
+  const angle = prog.angle + (target - prog.angle) * Math.min(1, dt * 6);
+  const events: SeesawEvent[] = [];
+  let pockets = prog.pockets;
+  let faults = prog.faults;
+  const balls = prog.balls.map((b, i) => {
+    let v = b.v + ((p.g * Math.sin(angle)) / p.mass) * dt;
+    v *= Math.max(0, 1 - 0.25 * dt);
+    const s = b.s + v * dt;
+    if (Math.abs(s) > p.halfLen) {
+      faults++;
+      events.push({ kind: 'fall', i });
+      return { s: 0, v: 0, pocket: b.pocket };
+    }
+    if (Math.abs(s - b.pocket) <= p.pocketW / 2 && Math.abs(v) < 0.9) {
+      pockets++;
+      events.push({ kind: 'pocket', i });
+      return { s: 0, v: 0, pocket: seesawPocket(rand, b.pocket > 0 ? -1 : 1, p.halfLen) };
+    }
+    return { s: +s.toFixed(4), v: +v.toFixed(4), pocket: b.pocket };
+  });
+  return { prog: { angle: +angle.toFixed(4), balls, pockets, faults }, events, won: pockets >= p.target };
+}
+
+// ---------------------------------------------------------------------------
+// Belts: conveyor cells drag the cursor; hazards rewind to the last checkpoint.
+// ---------------------------------------------------------------------------
+
+/** tiles: row-major, one char per 1x1 cell: '.' floor, '<>^v' belts, 'X' hazard, 'C' checkpoint, 'S' start, 'E' exit. */
+export type BeltsParams = { cols: number; rows: number; tiles: string; start: Vec; speed: number; reverseS: number; faultCap: number };
+export type BeltsProgress = { checkpoint: Vec; checkpoints: number; faults: number; frozenUntil: number };
+
+export const beltCell = (p: BeltsParams, x: number, y: number): string => {
+  const c = Math.floor(x);
+  const r = Math.floor(y);
+  if (c < 0 || c >= p.cols || r < 0 || r >= p.rows) return '.';
+  return p.tiles[r * p.cols + c];
+};
+/** Are the belts running backwards at `tSec`? */
+export const beltsReversed = (p: BeltsParams, tSec: number) => p.reverseS > 0 && Math.floor(Math.max(0, tSec) / p.reverseS) % 2 === 1;
+export function beltDir(p: BeltsParams, x: number, y: number, tSec: number): Vec | null {
+  const ch = beltCell(p, x, y);
+  const f = beltsReversed(p, tSec) ? -1 : 1;
+  if (ch === '<') return { x: -f, y: 0 };
+  if (ch === '>') return { x: f, y: 0 };
+  if (ch === '^') return { x: 0, y: -f };
+  if (ch === 'v') return { x: 0, y: f };
+  return null;
+}
+
+export function makeBelts(rand: Rand, sp: ModeSettings): { params: BeltsParams; progress: BeltsProgress } {
+  const cols = WORLD_W;
+  const rows = WORLD_H;
+  const g: string[] = new Array(cols * rows).fill('.');
+  const set = (c: number, r: number, ch: string) => {
+    if (c >= 0 && c < cols && r >= 0 && r < rows) g[r * cols + c] = ch;
+  };
+  const midRow = Math.floor(rows / 2);
+  set(0, midRow, 'S');
+  for (let r = midRow - 1; r <= midRow + 1; r++) set(cols - 1, r, 'E');
+  // Belt columns spread between col 2 and col 13; the gaps between them are safe floor.
+  const nb = clamp(Math.round(sp.beltCols), 1, 12);
+  const beltCols: number[] = [];
+  for (let i = 0; i < nb; i++) beltCols.push(Math.round(2 + (i * 11) / Math.max(1, nb - 1)));
+  const used = new Set(beltCols);
+  beltCols.forEach((c, i) => {
+    const up = rand() < 0.5;
+    for (let r = 1; r < rows - 1; r++) set(c, r, up ? '^' : 'v');
+    // Being swept to either end is a hazard, plus one loose hazard inside the belt.
+    set(c, 0, 'X');
+    set(c, rows - 1, 'X');
+    if (i > 0 || nb === 1) set(c, 1 + (Math.floor(rand() * (rows - 2)) % (rows - 2)), 'X');
+  });
+  // Checkpoints: safe columns roughly every third belt.
+  const safeCols = [];
+  for (let c = 2; c <= 13; c++) if (!used.has(c)) safeCols.push(c);
+  safeCols.forEach((c, i) => {
+    if (i % 2 === 1 || safeCols.length <= 2) set(c, midRow, 'C');
+  });
+  // Loose hazards on floor cells away from the start/exit columns.
+  let placed = 0;
+  let guard = 0;
+  const want = Math.max(0, Math.round(sp.hazards));
+  while (placed < want && guard++ < 400) {
+    const c = 2 + (Math.floor(rand() * 12) % 12);
+    const r = Math.floor(rand() * rows) % rows;
+    if (g[r * cols + c] === '.' && r !== midRow) {
+      set(c, r, 'X');
+      placed++;
+    }
+  }
+  const start = { x: 0.5, y: midRow + 0.5 };
+  return { params: { cols, rows, tiles: g.join(''), start, speed: sp.speed, reverseS: sp.reverseS, faultCap: sp.faults }, progress: { checkpoint: start, checkpoints: 0, faults: 0, frozenUntil: 0 } };
+}
+
+export type BeltsEvent = 'hazard' | 'checkpoint' | null;
+/** One tick after the belts have dragged the cursor. May move the body (hazard rewind). */
+export function beltsStep(p: BeltsParams, prog: BeltsProgress, nowMs: number, body: Body): { prog: BeltsProgress; body: Body; event: BeltsEvent; won: boolean } {
+  if (nowMs < prog.frozenUntil) return { prog, body: { x: prog.checkpoint.x, y: prog.checkpoint.y, vx: 0, vy: 0 }, event: null, won: false };
+  const ch = beltCell(p, body.x, body.y);
+  if (ch === 'X') {
+    return { prog: { ...prog, faults: prog.faults + 1, frozenUntil: nowMs + 600 }, body: { x: prog.checkpoint.x, y: prog.checkpoint.y, vx: 0, vy: 0 }, event: 'hazard', won: false };
+  }
+  if (ch === 'C') {
+    const cp = { x: Math.floor(body.x) + 0.5, y: Math.floor(body.y) + 0.5 };
+    if (cp.x !== prog.checkpoint.x || cp.y !== prog.checkpoint.y) return { prog: { ...prog, checkpoint: cp, checkpoints: prog.checkpoints + 1 }, body, event: 'checkpoint', won: false };
+  }
+  return { prog, body, event: null, won: ch === 'E' };
+}
+
+// ---------------------------------------------------------------------------
+// Needle: thread moving gaps in a row of walls.
+// ---------------------------------------------------------------------------
+
+export type NeedleWall = { x: number; phase: number };
+export type NeedleParams = { walls: NeedleWall[]; gapH: number; periodS: number; amp: number; thick: number; faultCap: number };
+export type NeedleProgress = { next: number; faults: number; frozenUntil: number };
+export const NEEDLE_TOP = 1.7;
+/** Cursor "body" radius used for wall contact. */
+const NEEDLE_CUR_R = 0.15;
+
+export function makeNeedle(rand: Rand, sp: ModeSettings): { params: NeedleParams; progress: NeedleProgress } {
+  const n = Math.max(1, Math.round(sp.walls));
+  const walls: NeedleWall[] = Array.from({ length: n }, (_, i) => ({ x: +(3.2 + (i * (WORLD_W - 1.6 - 3.2)) / Math.max(1, n - 1) - (n === 1 ? 0 : 0)).toFixed(2), phase: +(rand() * Math.PI * 2).toFixed(3) }));
+  return { params: { walls, gapH: sp.gapH, periodS: sp.periodS, amp: sp.amp, thick: 0.35, faultCap: sp.faults }, progress: { next: 0, faults: 0, frozenUntil: 0 } };
+}
+
+/** Centre y of wall i's gap at `tSec` (public sine, clamped so the gap stays on the field). */
+export function needleGapY(p: NeedleParams, i: number, tSec: number): number {
+  const cy = (NEEDLE_TOP + WORLD_H) / 2;
+  const y = cy + p.amp * Math.sin((2 * Math.PI * Math.max(0, tSec)) / p.periodS + p.walls[i].phase);
+  return clamp(y, NEEDLE_TOP + p.gapH / 2 + 0.1, WORLD_H - p.gapH / 2 - 0.1);
+}
+
+export function needleStep(p: NeedleParams, prog: NeedleProgress, nowMs: number, tSec: number, body: Body): { prog: NeedleProgress; body: Body; event: 'pass' | 'wall' | null; won: boolean } {
+  const w = p.walls[prog.next];
+  if (!w) return { prog, body, event: null, won: true };
+  const back = { x: w.x - 1.2, y: clamp(body.y, NEEDLE_TOP + 0.3, WORLD_H - 0.3), vx: 0, vy: 0 };
+  if (nowMs < prog.frozenUntil) return { prog, body: { ...back, y: body.y }, event: null, won: false };
+  const half = p.thick / 2 + NEEDLE_CUR_R;
+  const inGap = Math.abs(body.y - needleGapY(p, prog.next, tSec)) <= p.gapH / 2 - NEEDLE_CUR_R;
+  if (Math.abs(body.x - w.x) <= half && !inGap) {
+    return { prog: { ...prog, faults: prog.faults + 1, frozenUntil: nowMs + 500 }, body: back, event: 'wall', won: false };
+  }
+  if (body.x > w.x + half) {
+    const next = prog.next + 1;
+    return { prog: { ...prog, next }, body, event: 'pass', won: next >= p.walls.length };
+  }
+  return { prog, body, event: null, won: false };
+}
+
+// ---------------------------------------------------------------------------
+// Wires: colored nodes; only the next color is public, the order is secret.
+// ---------------------------------------------------------------------------
+
+export const WIRE_COLORS = ['#ff4d6d', '#4dabf7', '#ffd43b', '#69db7c', '#da77f2', '#ff922b', '#3bc9db', '#f783ac', '#a9e34b', '#9775fa', '#ffa8a8', '#74c0fc'];
+export const WIRE_NAMES = ['RED', 'BLUE', 'YELLOW', 'GREEN', 'PURPLE', 'ORANGE', 'CYAN', 'PINK', 'LIME', 'VIOLET', 'SALMON', 'SKY'];
+
+export type WireNode = { x: number; y: number; color: number };
+export type WiresParams = { nodes: WireNode[]; r: number; dwellMs: number; strikeCap: number; total: number };
+export type WiresSecret = { order: number[] };
+/** nextColor: color index to find now (-1 when done). onNode: node being dwelt (-1 none, -2 just fired). done: nodes connected so far, in order. */
+export type WiresProgress = { pos: number; nextColor: number; since: number; onNode: number; wrongSince: number; strikes: number; done: number[] };
+
+export function makeWires(rand: Rand, sp: ModeSettings): { params: WiresParams; progress: WiresProgress; secret: WiresSecret } {
+  const total = clamp(Math.round(sp.order) + Math.round(sp.decoys), 1, WIRE_COLORS.length);
+  const orderN = Math.min(Math.max(1, Math.round(sp.order)), total);
+  // Distinct colors, shuffled.
+  const colors = WIRE_COLORS.map((_, i) => i);
+  for (let i = colors.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1)) % (i + 1);
+    [colors[i], colors[j]] = [colors[j], colors[i]];
+  }
+  const spots = scatter(rand, total, 3, 1.2, 2 * sp.r + 0.7);
+  const nodes: WireNode[] = spots.map((s, i) => ({ x: +s.x.toFixed(2), y: +s.y.toFixed(2), color: colors[i] }));
+  // The secret order covers the first orderN nodes; the rest are decoys whose color is never asked for.
+  const order = Array.from({ length: orderN }, (_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1)) % (i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return {
+    params: { nodes, r: sp.r, dwellMs: sp.dwellMs, strikeCap: sp.strikes, total: orderN },
+    progress: { pos: 0, nextColor: nodes[order[0]].color, since: 0, onNode: -1, wrongSince: 0, strikes: 0, done: [] },
+    secret: { order },
+  };
+}
+
+export function wiresStep(p: WiresParams, prog: WiresProgress, secret: WiresSecret, nowMs: number, cur: Vec): { prog: WiresProgress; event: 'wire' | 'strike' | null; node: number; won: boolean } {
+  const want = secret.order[prog.pos];
+  if (want === undefined) return { prog, event: null, node: -1, won: true };
+  let node = p.nodes.findIndex(n => dist(cur, n) <= p.r);
+  if (node < 0 && prog.onNode >= 0 && dist(cur, p.nodes[prog.onNode]) <= p.r * DWELL_SLACK) node = prog.onNode;
+  if (node === want) {
+    if (prog.onNode !== node) return { prog: { ...prog, onNode: node, since: nowMs, wrongSince: 0 }, event: null, node, won: false };
+    if (nowMs - prog.since < p.dwellMs) return { prog, event: null, node, won: false };
+    const pos = prog.pos + 1;
+    const nextIdx = secret.order[pos];
+    return {
+      prog: { ...prog, pos, nextColor: nextIdx === undefined ? -1 : p.nodes[nextIdx].color, since: 0, onNode: -2, done: [...prog.done, node] },
+      event: 'wire',
+      node,
+      won: pos >= secret.order.length,
+    };
+  }
+  if (node >= 0 && !prog.done.includes(node) && prog.onNode !== -2) {
+    if (prog.wrongSince === -1) return { prog, event: null, node, won: false };
+    if (!prog.wrongSince) return { prog: { ...prog, wrongSince: nowMs, onNode: -1, since: 0 }, event: null, node, won: false };
+    if (nowMs - prog.wrongSince < WRONG_MS) return { prog, event: null, node, won: false };
+    return { prog: { ...prog, wrongSince: -1, strikes: prog.strikes + 1 }, event: 'strike', node, won: false };
+  }
+  if (node < 0 && (prog.onNode !== -1 || prog.since !== 0 || prog.wrongSince !== 0)) return { prog: { ...prog, onNode: -1, since: 0, wrongSince: 0 }, event: null, node: -1, won: false };
+  return { prog, event: null, node, won: false };
 }
 
 // ---------------------------------------------------------------------------

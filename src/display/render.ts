@@ -71,7 +71,7 @@ export function startRenderer(
   const onFx = (_c: unknown, row: { roomId: number; kind: string; x: number; y: number; who: string }) => {
     // The subscription is already room-scoped, but a room switch can race it.
     if (row.roomId !== opts.roomId()) return;
-    sfx(row.kind);
+    sfx(row.kind, row.who);
     const add = (p: Partial<Particle> & Pick<Particle, 'kind' | 'life'>) =>
       particles.push({ x: row.x, y: row.y, vx: 0, vy: 0, rot: 0, vr: 0, max: p.life, color: '#fff', size: 0.5, ...p });
     switch (row.kind) {
@@ -189,6 +189,127 @@ export function startRenderer(
       case 'station_cancel':
         shake = 0.3;
         add({ kind: 'text', life: 1, text: 'TOO EARLY!', color: '#ff5a36', size: 0.6, vy: -0.8 });
+        break;
+      // Echo.
+      case 'echo_flash':
+        add({ kind: 'ring', life: 0.5, color: '#ffffff', size: 1.2 });
+        break;
+      case 'echo_go':
+        add({ kind: 'text', life: 1.1, text: 'YOUR TURN!', color: '#ffd23f', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      case 'echo_pad':
+        burst(row.x, row.y, 10);
+        break;
+      case 'echo_round':
+        for (let i = 0; i < 3; i++) burst(Math.random() * WORLD_W, -0.5, 20, 1);
+        add({ kind: 'text', life: 1.3, text: 'ROUND CLEAR!', color: '#43e05a', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      case 'echo_fault':
+        shake = 0.8;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.3, text: 'WRONG! AGAIN!', color: '#ff3b3b', size: 0.9, vy: -0.3, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      // Crane.
+      case 'crane_drop':
+        shake = 0.3;
+        burst(row.x, row.y, 14);
+        add({ kind: 'text', life: 1, text: 'STACKED!', color: '#ff922b', size: 0.8, vy: -1 });
+        break;
+      case 'crane_miss':
+        shake = 0.5;
+        add({ kind: 'text', life: 1.1, text: 'WOBBLY!', color: '#ff5a36', size: 0.7, vy: -0.8 });
+        break;
+      case 'crane_topple':
+        shake = 1.2;
+        flash = 0.8;
+        flashColor = '255,59,59';
+        for (let i = 0; i < 3; i++) burst(row.x, row.y, 30);
+        add({ kind: 'text', life: 1.6, text: 'TIMBER!', color: '#ff3b3b', size: 1, vy: -0.5, x: WORLD_W / 2, y: WORLD_H / 2 });
+        break;
+      // Spotlight.
+      case 'spot_out':
+        flash = 0.4;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 0.9, text: 'OUT OF THE LIGHT!', color: '#ff3b3b', size: 0.7, vy: -0.8 });
+        break;
+      case 'spot_in':
+        add({ kind: 'ring', life: 0.5, color: '#ffd23f', size: 1.2 });
+        break;
+      // Sheep.
+      case 'sheep_in':
+        burst(row.x, row.y, 14);
+        add({ kind: 'text', life: 1, text: 'BAA! IN!', color: '#ffffff', size: 0.7, vy: -1 });
+        break;
+      case 'sheep_escape':
+        shake = 0.4;
+        add({ kind: 'text', life: 1.1, text: 'ESCAPED!', color: '#ff5a36', size: 0.7, vy: -0.8 });
+        break;
+      // Ice.
+      case 'ice_gate':
+        burst(row.x, row.y, 16);
+        add({ kind: 'text', life: 1, text: 'STOPPED!', color: '#4dabf7', size: 0.8, vy: -1 });
+        break;
+      case 'ice_slide':
+        shake = 0.3;
+        add({ kind: 'text', life: 1, text: 'SLID THROUGH!', color: '#ff5a36', size: 0.7, vy: -0.8 });
+        break;
+      // Plank.
+      case 'plank_tile':
+        burst(row.x, row.y, 12);
+        add({ kind: 'text', life: 0.9, text: 'SET!', color: '#d9a35c', size: 0.7, vy: -1 });
+        break;
+      case 'plank_wipe':
+        shake = 0.4;
+        add({ kind: 'text', life: 1, text: 'WIPED!', color: '#ff5a36', size: 0.7, vy: -0.8 });
+        break;
+      case 'plank_cancel':
+        add({ kind: 'text', life: 0.8, text: 'COME BACK!', color: '#ffd23f', size: 0.6, vy: -0.8 });
+        break;
+      // Seesaw.
+      case 'seesaw_pocket':
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 18);
+        add({ kind: 'text', life: 1.1, text: 'POCKET!', color: '#ffd23f', size: 0.9, vy: -1 });
+        break;
+      case 'seesaw_fall':
+        shake = 0.7;
+        flash = 0.4;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.2, text: 'OFF THE END!', color: '#ff3b3b', size: 0.8, vy: -0.8 });
+        break;
+      // Belts.
+      case 'belts_hazard':
+        shake = 0.9;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 24);
+        add({ kind: 'text', life: 1.3, text: 'ZAPPED!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
+        break;
+      case 'belts_checkpoint':
+        burst(row.x, row.y, 12);
+        add({ kind: 'text', life: 1, text: 'CHECKPOINT!', color: '#43e05a', size: 0.7, vy: -1 });
+        break;
+      // Needle.
+      case 'needle_pass':
+        burst(row.x, row.y, 10);
+        add({ kind: 'text', life: 0.8, text: 'THROUGH!', color: '#ffd23f', size: 0.7, vy: -1 });
+        break;
+      case 'needle_wall':
+        shake = 0.7;
+        flash = 0.5;
+        flashColor = '255,138,61';
+        add({ kind: 'text', life: 1.1, text: 'OUCH!', color: '#ff5a36', size: 0.8, vy: -0.8 });
+        break;
+      // Wires.
+      case 'wires_wire':
+        burst(row.x, row.y, 14);
+        add({ kind: 'text', life: 1, text: 'CONNECTED!', color: '#ffd43b', size: 0.8, vy: -1 });
+        break;
+      case 'wires_strike':
+        shake = 0.8;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.2, text: 'WRONG WIRE!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
         break;
       // Balloon.
       case 'save':
@@ -346,7 +467,7 @@ export function startRenderer(
     const cur = conn.db.cursor.id.find(opts.roomId());
     const cfg = conn.db.config.id.find(0);
     if (cur && cfg) {
-      const phys = { ...cursorPhysics(running?.row.kind, cfg), tickHz: cfg.tickHz };
+      const phys = { ...cursorPhysics(running?.row.kind, cfg), tickHz: cfg.tickHz, level: running ? running.view : null };
       rc = smoother.step(dt, phys, running ? cursorHoldUntilMs(running.view) : 0);
     }
 
