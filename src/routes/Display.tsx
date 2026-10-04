@@ -9,7 +9,7 @@ import { countdownBeep, disableSound, enableSound } from '../display/audio';
 import { GAME_META } from '../game/draw';
 import { spriteUrl } from '../game/sprites';
 import { Win } from '../ui/Win';
-import { LEVEL_ROTATION, STAGES, VOTE_SECS, voteWinner } from '../../spacetimedb/src/sim';
+import { isPlayKind, STAGES, VOTE_SECS, voteHover } from '../../spacetimedb/src/sim';
 
 export const RULE_LABEL: Record<string, [string, string]> = {
   mean: ['DEMOCRACY', 'average of everyone'],
@@ -23,9 +23,10 @@ type LevelRow = { id: bigint; kind: string; state: string; params: string; progr
 
 const metaOf = (l: LevelRow) => JSON.parse(l.params) as { stage?: number; stages?: number; playAt?: number };
 
+/** Mirrors the server's nextUp: a won stage leads to the next stage; a lost run or a finished game opens the picker. */
 function nextUp(l: LevelRow) {
   const stage = metaOf(l).stage ?? 1;
-  if (stage < STAGES && LEVEL_ROTATION.includes(l.kind as (typeof LEVEL_ROTATION)[number])) return { kind: l.kind, stage: stage + 1 };
+  if (l.state !== 'lost' && stage < STAGES && isPlayKind(l.kind)) return { kind: l.kind, stage: stage + 1 };
   return { kind: 'vote', stage: 0 };
 }
 
@@ -299,9 +300,60 @@ function GameStatus({ level, now, cursor }: { level: LevelRow; now: number; curs
     );
   if (level.kind === 'maze') return <span className="chip">BONKS {prog.hits}</span>;
   if (level.kind === 'vote') {
-    const lead = cursor ? voteWinner(p.cards, cursor.x, cursor.y) : null;
-    return lead ? <span className="chip" style={{ background: GAME_META[lead.kind]?.color }}>LEADING: {GAME_META[lead.kind]?.exe}</span> : null;
+    // The client only names the card the cursor is inside; the server decides.
+    const pick = cursor ? voteHover(p.cards, cursor.x, cursor.y) : null;
+    return pick ? (
+      <span className="chip" style={{ background: GAME_META[pick.kind]?.color }}>PICK: {GAME_META[pick.kind]?.exe}</span>
+    ) : (
+      <span className="chip" style={{ background: '#ff5a36' }}>NO PICK</span>
+    );
   }
+  if (level.kind === 'redlight')
+    return (
+      <>
+        <span className="chip" style={{ background: prog.light === 'red' ? '#ff3b3b' : '#43e05a' }}>{prog.light === 'red' ? 'RED' : 'GREEN'}</span>
+        <span className="chip">FAULTS {prog.faults}/{p.faultCap}</span>
+      </>
+    );
+  if (level.kind === 'balloon')
+    return (
+      <span className="chip">
+        {Array.from({ length: p.dropCap }, (_, i) => (
+          <img key={i} src={spriteUrl(i < p.dropCap - prog.drops ? 'heart' : 'skull')} alt="" style={{ height: 16 }} />
+        ))}{' '}
+        · SAVES {prog.saves}
+      </span>
+    );
+  if (level.kind === 'mole')
+    return (
+      <>
+        <span className="chip">
+          <img src={spriteUrl('star')} alt="" style={{ height: 16 }} /> {prog.score}/{p.target}
+        </span>
+        <span className="chip">MISSES {prog.misses}/{p.missCap}</span>
+      </>
+    );
+  if (level.kind === 'potato') {
+    const fuse = Math.max(0, (prog.fuseAt - now) / 1000);
+    return (
+      <span className="chip" style={{ background: fuse < 3 ? '#ff3b3b' : '#fff' }}>
+        <img src={spriteUrl('bomb')} alt="" style={{ height: 16 }} /> FUSE {Math.ceil(fuse)}s
+      </span>
+    );
+  }
+  if (level.kind === 'chairs')
+    return (
+      <span className="chip">
+        {prog.left.length} CHAIR{prog.left.length === 1 ? '' : 'S'} · ROUND {prog.round}
+      </span>
+    );
+  if (level.kind === 'keyboard')
+    return (
+      <span className="chip" style={{ fontFamily: 'var(--pixel)', letterSpacing: 2 }}>
+        {String(p.word).slice(0, prog.next)}
+        <span style={{ opacity: 0.4 }}>{String(p.word).slice(prog.next)}</span>
+      </span>
+    );
   if (level.kind === 'minesweeper') {
     const fuse = prog.nextAutoAt ? Math.max(0, (prog.nextAutoAt - now) / 1000) : null;
     return (
@@ -442,7 +494,7 @@ function Results(props: {
         </div>
         {props.nextIn !== null && (
           <div className="next-up">
-            NEXT: {nxt.kind === 'vote' ? 'VOTE FOR THE NEXT GAME' : `${GAME_META[nxt.kind]?.exe} STAGE ${nxt.stage}`} {props.nextIn > 0 ? `IN ${props.nextIn}…` : 'LOADING…'}
+            NEXT: {nxt.kind === 'vote' ? 'PICK THE NEXT GAME' : `${GAME_META[nxt.kind]?.exe} STAGE ${nxt.stage}`} {props.nextIn > 0 ? `IN ${props.nextIn}…` : 'LOADING…'}
           </div>
         )}
       </Win>

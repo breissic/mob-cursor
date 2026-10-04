@@ -6,8 +6,23 @@ export const WORLD_H = 9;
 export type Rule = 'mean' | 'median' | 'activity' | 'tug' | 'dictator';
 export const RULES: Rule[] = ['mean', 'median', 'activity', 'tug', 'dictator'];
 
-export type LevelKind = 'lobby' | 'targets' | 'maze' | 'minesweeper' | 'vote';
-export const LEVEL_ROTATION: LevelKind[] = ['targets', 'maze', 'minesweeper'];
+export type LevelKind =
+  | 'lobby'
+  | 'targets'
+  | 'maze'
+  | 'minesweeper'
+  | 'redlight'
+  | 'balloon'
+  | 'mole'
+  | 'potato'
+  | 'chairs'
+  | 'keyboard'
+  | 'vote';
+/** A minigame the mob can play (everything but the lobby and the picker). */
+export type PlayKind = Exclude<LevelKind, 'lobby' | 'vote'>;
+/** Every playable game; the picker shows one card per entry, in this order. */
+export const LEVEL_ROTATION: PlayKind[] = ['targets', 'maze', 'minesweeper', 'redlight', 'balloon', 'mole', 'potato', 'chairs', 'keyboard'];
+export const isPlayKind = (k: string | null | undefined): k is PlayKind => (LEVEL_ROTATION as string[]).includes(k ?? '');
 
 /** Player palette. Index is sent in ghost_frame, so client and server share it. */
 export const COLORS = [
@@ -196,14 +211,53 @@ export const STAGE_SPECS = {
     { cols: 12, rows: 7, mines: 13, secs: 180 },
     { cols: 14, rows: 8, mines: 20, secs: 210 },
   ],
+  /** Faster flips, tighter dead-band, fewer faults allowed. graceMs: red-light settle time before the dead-band arms. */
+  redlight: [
+    { flipMinS: 2.5, flipMaxS: 4.5, deadband: 0.4, faults: 5, graceMs: 600, secs: 60 },
+    { flipMinS: 1.8, flipMaxS: 3.5, deadband: 0.3, faults: 4, graceMs: 500, secs: 60 },
+    { flipMinS: 1.2, flipMaxS: 2.6, deadband: 0.22, faults: 3, graceMs: 400, secs: 60 },
+  ],
+  /** Heavier balloons, then wind, then a second balloon. Survive `secs` to win. */
+  balloon: [
+    { n: 1, gravity: 1.5, wind: 0, drops: 3, secs: 30 },
+    { n: 1, gravity: 1.9, wind: 0.9, drops: 3, secs: 40 },
+    { n: 2, gravity: 2.2, wind: 1.3, drops: 3, secs: 45 },
+  ],
+  /** More holes, shorter pop-up windows. */
+  mole: [
+    { holes: 4, upMs: 2400, target: 6, misses: 4, secs: 60 },
+    { holes: 6, upMs: 1800, target: 8, misses: 4, secs: 60 },
+    { holes: 8, upMs: 1300, target: 10, misses: 3, secs: 60 },
+  ],
+  /** Shorter fuse, smaller bucket that starts to wander. */
+  potato: [
+    { fuseS: 15, r: 1.5, move: 0 },
+    { fuseS: 11, r: 1.25, move: 1.8 },
+    { fuseS: 8, r: 1.0, move: 2.8 },
+  ],
+  /** More (smaller) chairs and a shorter "music stopping" warning. */
+  chairs: [
+    { chairs: 4, w: 2.6, h: 2.0, musicMinS: 4, musicMaxS: 8, warnS: 2.0, secs: 60 },
+    { chairs: 5, w: 2.2, h: 1.7, musicMinS: 3, musicMaxS: 7, warnS: 1.3, secs: 60 },
+    { chairs: 6, w: 1.8, h: 1.4, musicMinS: 3, musicMaxS: 6, warnS: 0.8, secs: 60 },
+  ],
+  /** Longer words, shorter dwell. */
+  keyboard: [
+    { words: ['MOB', 'CAT', 'WIN', 'YAY', 'FUN'], dwellMs: 1200, secs: 60 },
+    { words: ['MOUSE', 'PIXEL', 'CLICK', 'PARTY', 'HOVER'], dwellMs: 900, secs: 75 },
+    { words: ['CURSOR', 'SCREEN', 'WINDOW', 'FRIEND', 'BUTTON'], dwellMs: 700, secs: 90 },
+  ],
 } as const;
 
+export type Rect = { x: number; y: number; w: number; h: number };
+export const inRect = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
 // ---------------------------------------------------------------------------
-// Vote round: between games the mob parks the (extra strong) cursor on a card.
+// Picker round: between games the mob parks the (extra strong) cursor on a card.
 // ---------------------------------------------------------------------------
 
-/** Seconds of voting after the 3-2-1 countdown. */
-export const VOTE_SECS = 7;
+/** Seconds on the picker timer (after the 3-2-1 countdown, and after every restart). */
+export const VOTE_SECS = 5;
 /** Cursor strength multipliers during a vote. */
 export const VOTE_GAIN = 2.5;
 export const VOTE_DAMPING = 1.3;
@@ -220,39 +274,62 @@ export function cursorPhysics(kind: string | null | undefined, cfg: Spring): Spr
     : { gain: cfg.gain, damping: cfg.damping, maxSpeed: cfg.maxSpeed };
 }
 
-export type VoteCard = { kind: string; x: number; y: number; w: number; h: number };
+export type VoteCard = Rect & { kind: string };
 export type VoteParams = { cards: VoteCard[]; lastKind?: string };
-export type VoteProgress = { chosen?: string };
+/** endsAt: server unix ms when the timer hits zero (mirrors level.deadline so the display can draw it). */
+export type VoteProgress = { endsAt: number; restarts: number; chosen?: string };
 
-/** Lay the cards out side by side, centered, below a strip where the cursor starts. */
+/** Top strip (title, timer, cursor start) is above this; cards fill the rest in up to two rows. */
+const VOTE_TOP = 1.9;
+
+/** Lay the cards out in a centered grid (one row up to 4 cards, else two rows), below the strip where the cursor starts. */
 export function voteLayout(kinds: readonly string[]): VoteCard[] {
   const n = kinds.length;
-  const gap = 0.5;
-  const w = Math.min(4.4, (WORLD_W - 1 - gap * (n - 1)) / n);
-  const h = 5.6;
-  const total = n * w + (n - 1) * gap;
-  const x0 = (WORLD_W - total) / 2;
-  return kinds.map((kind, i) => ({ kind, x: x0 + i * (w + gap), y: 2.4, w, h }));
-}
-
-/** Card under the cursor, else the nearest card (someone always wins). */
-export function voteWinner(cards: VoteCard[], x: number, y: number): VoteCard {
-  const inside = cards.find(c => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
-  if (inside) return inside;
-  let best = cards[0];
-  let bd = Infinity;
-  for (const c of cards) {
-    const d = Math.hypot(clamp(x, c.x, c.x + c.w) - x, clamp(y, c.y, c.y + c.h) - y);
-    if (d < bd) {
-      bd = d;
-      best = c;
-    }
+  const cols = n <= 4 ? n : Math.ceil(n / 2);
+  const rows = Math.ceil(n / cols);
+  const gap = 0.35;
+  const w = Math.min(4.4, (WORLD_W - 0.6 - gap * (cols - 1)) / cols);
+  const h = (WORLD_H - 0.3 - VOTE_TOP - gap * (rows - 1)) / rows;
+  const out: VoteCard[] = [];
+  for (let r = 0; r < rows; r++) {
+    const inRow = Math.min(cols, n - r * cols);
+    const x0 = (WORLD_W - (inRow * w + (inRow - 1) * gap)) / 2;
+    for (let c = 0; c < inRow; c++) out.push({ kind: kinds[r * cols + c], x: x0 + c * (w + gap), y: VOTE_TOP + r * (h + gap), w, h });
   }
-  return best;
+  return out;
 }
 
-/** Where the cursor waits during the vote countdown: top middle, outside every card. */
+/** The card whose rect contains the cursor, or null when the cursor is in a gap. Hover is purely geometric. */
+export function voteHover(cards: VoteCard[], x: number, y: number): VoteCard | null {
+  return cards.find(c => inRect(c, x, y)) ?? null;
+}
+
+/**
+ * Timer hit zero: the hovered card is the next game. In a gap nothing is picked;
+ * the picker stays up and the timer restarts for another VOTE_SECS.
+ */
+export function voteResolve(p: VoteParams, prog: VoteProgress, x: number, y: number, nowMs: number): { chosen: VoteCard } | { prog: VoteProgress } {
+  const hover = voteHover(p.cards, x, y);
+  if (hover) return { chosen: hover };
+  return { prog: { ...prog, endsAt: nowMs + VOTE_SECS * 1000, restarts: prog.restarts + 1 } };
+}
+
+/** Where the cursor waits during the picker countdown: top middle, outside every card. */
 export const VOTE_START = { x: WORLD_W / 2, y: 1.2 };
+
+/**
+ * Level deadlines and in-progress timers are wall-clock unix ms. When the tick
+ * resumes after a pause, every known timer field moves with the level's playAt.
+ */
+const TIMER_KEYS = ['frozenUntil', 'flipAt', 'litAt', 'at', 'until', 'fuseAt', 'stopAt', 'safeUntil', 'since', 'endsAt'];
+export function shiftLevelTimes<T extends Record<string, unknown>>(prog: T, dMs: number): T {
+  const out: Record<string, unknown> = { ...prog };
+  for (const k of TIMER_KEYS) {
+    const v = out[k];
+    if (typeof v === 'number' && v > 0) out[k] = v + dMs;
+  }
+  return out as T;
+}
 
 /** Minesweeper auto-click fires after a random delay in this range (ms). */
 export const AUTO_CLICK_MIN_MS = 0;
@@ -469,6 +546,379 @@ export function revealCell(
     prog: { ...prog, cells: cells.join(''), lives, firstDone: true },
     result,
   };
+}
+
+/** Same wobble as moving targets: a point that drifts around its anchor over time. */
+function wobble(anchor: Vec, amp: number, t: number, ph: number, margin: number): Vec {
+  if (!amp) return { x: anchor.x, y: anchor.y };
+  return {
+    x: clamp(anchor.x + amp * Math.sin(t * 0.9 + ph), margin, WORLD_W - margin),
+    y: clamp(anchor.y + amp * 0.7 * Math.cos(t * 0.63 + ph * 1.7), margin, WORLD_H - margin),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Red Light, Green Light
+// ---------------------------------------------------------------------------
+
+export type RedlightSpec = (typeof STAGE_SPECS.redlight)[number];
+export type RedlightParams = {
+  start: Vec;
+  /** Cross this x to win. */
+  finishX: number;
+  deadband: number;
+  faultCap: number;
+  flipMinS: number;
+  flipMaxS: number;
+  /** After a red light, this long to settle before the dead-band arms. */
+  graceMs: number;
+};
+/** anchor: where the cursor was when the dead-band armed (null until then). frozenUntil: held at start after a fault. */
+export type RedlightProgress = {
+  light: 'green' | 'red';
+  flipAt: number;
+  litAt: number;
+  faults: number;
+  anchor: Vec | null;
+  frozenUntil: number;
+};
+export const REDLIGHT_FREEZE_MS = 700;
+
+export function redlightFlipMs(p: { flipMinS: number; flipMaxS: number }, rand: Rand) {
+  return Math.round((p.flipMinS + rand() * (p.flipMaxS - p.flipMinS)) * 1000);
+}
+
+export function makeRedlight(rand: Rand, sp: RedlightSpec, playAt: number): { params: RedlightParams; progress: RedlightProgress } {
+  const params: RedlightParams = {
+    start: { x: 1, y: WORLD_H / 2 },
+    finishX: WORLD_W - 1.2,
+    deadband: sp.deadband,
+    faultCap: sp.faults,
+    flipMinS: sp.flipMinS,
+    flipMaxS: sp.flipMaxS,
+    graceMs: sp.graceMs,
+  };
+  const progress: RedlightProgress = { light: 'green', flipAt: playAt + redlightFlipMs(params, rand), litAt: playAt, faults: 0, anchor: null, frozenUntil: 0 };
+  return { params, progress };
+}
+
+/**
+ * One tick of red light / green light. Returns the same `prog` object when
+ * nothing changed. Events: 'green' | 'red' (the light flipped), 'fault'.
+ */
+export function redlightStep(
+  p: RedlightParams,
+  prog: RedlightProgress,
+  body: Body,
+  nowMs: number,
+  rand: Rand
+): { prog: RedlightProgress; body: Body; events: ('green' | 'red' | 'fault')[]; won: boolean } {
+  const events: ('green' | 'red' | 'fault')[] = [];
+  let out = prog;
+  if (nowMs >= prog.flipAt) {
+    const light = prog.light === 'green' ? 'red' : 'green';
+    out = { ...prog, light, litAt: nowMs, flipAt: nowMs + redlightFlipMs(p, rand), anchor: null };
+    events.push(light);
+  }
+  const hold = { x: p.start.x, y: p.start.y, vx: 0, vy: 0 };
+  if (nowMs < out.frozenUntil) return { prog: out, body: hold, events, won: false };
+  if (out.light === 'red' && nowMs >= out.litAt + p.graceMs) {
+    if (!out.anchor) out = { ...out, anchor: { x: body.x, y: body.y } };
+    else if (Math.hypot(body.x - out.anchor.x, body.y - out.anchor.y) > p.deadband) {
+      out = { ...out, faults: out.faults + 1, anchor: { ...p.start }, frozenUntil: nowMs + REDLIGHT_FREEZE_MS };
+      events.push('fault');
+      return { prog: out, body: hold, events, won: false };
+    }
+  }
+  return { prog: out, body, events, won: body.x >= p.finishX };
+}
+
+// ---------------------------------------------------------------------------
+// Keep the Balloon Up
+// ---------------------------------------------------------------------------
+
+export type BalloonSpec = (typeof STAGE_SPECS.balloon)[number];
+/** Ballistic state at BalloonProgress.at: position, velocity, horizontal (wind) acceleration. */
+export type Balloon = { x: number; y: number; vx: number; vy: number; ax: number };
+export type BalloonParams = { n: number; r: number; handR: number; gravity: number; wind: number; dropCap: number; bounce: number };
+/**
+ * Balloons are stored at time `at` and fly ballistically from there, so the
+ * row only changes on an event (save, drop, wall) and both server and client
+ * compute the same positions in between.
+ */
+export type BalloonProgress = { balloons: Balloon[]; at: number; drops: number; saves: number };
+
+function spawnBalloon(p: BalloonParams, rand: Rand): Balloon {
+  return { x: 2 + rand() * (WORLD_W - 4), y: 1.2, vx: (rand() - 0.5) * 1.5, vy: 0, ax: p.wind ? (rand() < 0.5 ? -p.wind : p.wind) : 0 };
+}
+
+export function makeBalloons(rand: Rand, sp: BalloonSpec, playAt: number): { params: BalloonParams; progress: BalloonProgress } {
+  const params: BalloonParams = { n: sp.n, r: 0.7, handR: 0.9, gravity: sp.gravity, wind: sp.wind, dropCap: sp.drops, bounce: 5 };
+  const balloons = Array.from({ length: sp.n }, () => spawnBalloon(params, rand));
+  // Spread several balloons out so they do not fall as one.
+  balloons.forEach((b, i) => (b.x = ((i + 0.5) / sp.n) * (WORLD_W - 4) + 2));
+  return { params, progress: { balloons, at: playAt, drops: 0, saves: 0 } };
+}
+
+/** Advance one balloon `dt` seconds under gravity `g` and its wind acceleration. */
+export function balloonAt(b: Balloon, g: number, dt: number): Balloon {
+  return {
+    x: b.x + b.vx * dt + 0.5 * b.ax * dt * dt,
+    y: b.y + b.vy * dt + 0.5 * g * dt * dt,
+    vx: b.vx + b.ax * dt,
+    vy: b.vy + g * dt,
+    ax: b.ax,
+  };
+}
+
+/** Every balloon's state at `nowMs`. */
+export function balloonsNow(p: BalloonParams, prog: BalloonProgress, nowMs: number): Balloon[] {
+  const dt = Math.max(0, (nowMs - prog.at) / 1000);
+  return prog.balloons.map(b => balloonAt(b, p.gravity, dt));
+}
+
+export type BalloonEvent = { kind: 'save' | 'drop'; x: number; y: number };
+
+/**
+ * One tick: walls, floor (drop + respawn) and the hand (cursor under the
+ * balloon and close enough pops it back up). Returns the same `prog` when
+ * nothing happened.
+ */
+export function balloonStep(
+  p: BalloonParams,
+  prog: BalloonProgress,
+  nowMs: number,
+  hand: Vec,
+  rand: Rand
+): { prog: BalloonProgress; events: BalloonEvent[] } {
+  const bs = balloonsNow(p, prog, nowMs);
+  const events: BalloonEvent[] = [];
+  let drops = prog.drops;
+  let saves = prog.saves;
+  let changed = false;
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    if (b.x < p.r) {
+      b.x = p.r;
+      b.vx = Math.abs(b.vx);
+      changed = true;
+    } else if (b.x > WORLD_W - p.r) {
+      b.x = WORLD_W - p.r;
+      b.vx = -Math.abs(b.vx);
+      changed = true;
+    }
+    if (b.y < p.r) {
+      b.y = p.r;
+      b.vy = Math.abs(b.vy) * 0.5;
+      changed = true;
+    }
+    if (b.y + p.r >= WORLD_H) {
+      drops += 1;
+      events.push({ kind: 'drop', x: b.x, y: WORLD_H - p.r });
+      bs[i] = spawnBalloon(p, rand);
+      changed = true;
+      continue;
+    }
+    const under = hand.y > b.y && Math.hypot(hand.x - b.x, hand.y - b.y) <= p.r + p.handR;
+    if (under && b.vy > -0.5) {
+      b.vy = -p.bounce;
+      b.vx = clamp(b.vx + (b.x - hand.x) * 2.5 + (rand() - 0.5) * 0.8, -4, 4);
+      b.ax = p.wind ? (rand() < 0.5 ? -p.wind : p.wind) : 0;
+      saves += 1;
+      events.push({ kind: 'save', x: b.x, y: b.y });
+      changed = true;
+    }
+  }
+  if (!changed) return { prog, events };
+  return { prog: { balloons: bs, at: nowMs, drops, saves }, events };
+}
+
+// ---------------------------------------------------------------------------
+// Whack-a-Mole
+// ---------------------------------------------------------------------------
+
+export type MoleSpec = (typeof STAGE_SPECS.mole)[number];
+export type MoleParams = { holes: Vec[]; r: number; upMs: number; gapMs: number; target: number; missCap: number };
+/** up: hole index with the mole, -1 while every mole is down. until: when that state ends. */
+export type MoleProgress = { score: number; misses: number; up: number; last: number; until: number };
+
+export function makeMoles(sp: MoleSpec, playAt: number): { params: MoleParams; progress: MoleProgress } {
+  // Two rows of holes; the centre (where the cursor starts) stays clear.
+  const cols = Math.ceil(sp.holes / 2);
+  const holes: Vec[] = [];
+  for (let i = 0; i < sp.holes; i++) {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    holes.push({ x: ((c + 0.5) / cols) * WORLD_W, y: r === 0 ? 2.9 : 6.5 });
+  }
+  const params: MoleParams = { holes, r: 1.05, upMs: sp.upMs, gapMs: 700, target: sp.target, missCap: sp.misses };
+  return { params, progress: { score: 0, misses: 0, up: -1, last: -1, until: playAt + params.gapMs } };
+}
+
+/** One tick: when a window ends, the cursor inside that hole scores, else it is a miss; then the next mole pops up. */
+export function moleStep(
+  p: MoleParams,
+  prog: MoleProgress,
+  nowMs: number,
+  cur: Vec,
+  rand: Rand
+): { prog: MoleProgress; event: 'hit' | 'miss' | 'up' | null } {
+  if (nowMs < prog.until) return { prog, event: null };
+  if (prog.up >= 0) {
+    const h = p.holes[prog.up];
+    const hit = Math.hypot(cur.x - h.x, cur.y - h.y) <= p.r;
+    return {
+      prog: { ...prog, score: prog.score + (hit ? 1 : 0), misses: prog.misses + (hit ? 0 : 1), up: -1, last: prog.up, until: nowMs + p.gapMs },
+      event: hit ? 'hit' : 'miss',
+    };
+  }
+  let pick = Math.floor(rand() * p.holes.length) % p.holes.length;
+  if (p.holes.length > 1 && pick === prog.last) pick = (pick + 1) % p.holes.length;
+  return { prog: { ...prog, up: pick, until: nowMs + p.upMs }, event: 'up' };
+}
+
+// ---------------------------------------------------------------------------
+// Hot Potato
+// ---------------------------------------------------------------------------
+
+export type PotatoSpec = (typeof STAGE_SPECS.potato)[number];
+export type PotatoParams = { bucket: Vec; r: number; move: number; fuseS: number; ph: number };
+/** fuseAt: unix ms when the potato goes off. */
+export type PotatoProgress = { fuseAt: number };
+
+export function makePotato(rand: Rand, sp: PotatoSpec, playAt: number): { params: PotatoParams; progress: PotatoProgress } {
+  // Away from the centre, where the cursor starts.
+  let bucket = { x: WORLD_W / 2, y: WORLD_H / 2 };
+  let guard = 0;
+  while (Math.hypot(bucket.x - WORLD_W / 2, bucket.y - WORLD_H / 2) < 4 && guard++ < 100)
+    bucket = { x: 1.8 + rand() * (WORLD_W - 3.6), y: 1.8 + rand() * (WORLD_H - 3.6) };
+  const params: PotatoParams = { bucket, r: sp.r, move: sp.move, fuseS: sp.fuseS, ph: rand() * Math.PI * 2 };
+  return { params, progress: { fuseAt: playAt + sp.fuseS * 1000 } };
+}
+
+/** Bucket centre `t` seconds after play starts (same math on server and client). */
+export function bucketPos(p: PotatoParams, t: number): Vec {
+  return wobble(p.bucket, p.move, t, p.ph, p.r + 0.3);
+}
+
+export function potatoInBucket(p: PotatoParams, t: number, x: number, y: number): boolean {
+  const b = bucketPos(p, t);
+  return Math.hypot(x - b.x, y - b.y) <= p.r;
+}
+
+// ---------------------------------------------------------------------------
+// Musical Chairs
+// ---------------------------------------------------------------------------
+
+export type ChairsSpec = (typeof STAGE_SPECS.chairs)[number];
+export type ChairsParams = { chairs: Rect[]; musicMinS: number; musicMaxS: number; warnS: number; pauseMs: number };
+/** left: indices of chairs still on the floor. stopAt: when the music stops. sat: chair taken last round (removed). */
+export type ChairsProgress = { left: number[]; stopAt: number; round: number; sat: number; safeUntil: number };
+
+export function chairsMusicMs(p: { musicMinS: number; musicMaxS: number }, rand: Rand) {
+  return Math.round((p.musicMinS + rand() * (p.musicMaxS - p.musicMinS)) * 1000);
+}
+
+export function makeChairs(rand: Rand, sp: ChairsSpec, playAt: number): { params: ChairsParams; progress: ChairsProgress } {
+  // A ring around the (empty) centre so every round means a real trip.
+  const a0 = rand() * Math.PI * 2;
+  const chairs: Rect[] = Array.from({ length: sp.chairs }, (_, i) => {
+    const a = a0 + (i / sp.chairs) * Math.PI * 2;
+    const cx = WORLD_W / 2 + Math.cos(a) * (WORLD_W / 2 - sp.w / 2 - 0.6);
+    const cy = WORLD_H / 2 + Math.sin(a) * (WORLD_H / 2 - sp.h / 2 - 0.6);
+    return { x: cx - sp.w / 2, y: cy - sp.h / 2, w: sp.w, h: sp.h };
+  });
+  const params: ChairsParams = { chairs, musicMinS: sp.musicMinS, musicMaxS: sp.musicMaxS, warnS: sp.warnS, pauseMs: 1500 };
+  return {
+    params,
+    progress: { left: chairs.map((_, i) => i), stopAt: playAt + chairsMusicMs(params, rand), round: 1, sat: -1, safeUntil: 0 },
+  };
+}
+
+/**
+ * At stopAt the cursor must be inside a remaining chair. That chair is then
+ * removed and the music restarts; sitting on the last chair wins.
+ */
+export function chairsStep(
+  p: ChairsParams,
+  prog: ChairsProgress,
+  nowMs: number,
+  cur: Vec,
+  rand: Rand
+): { prog: ChairsProgress; event: 'safe' | 'won' | 'lost' | null } {
+  if (nowMs < prog.stopAt) return { prog, event: null };
+  const sat = prog.left.find(i => inRect(p.chairs[i], cur.x, cur.y));
+  if (sat === undefined) return { prog, event: 'lost' };
+  if (prog.left.length === 1) return { prog: { ...prog, sat }, event: 'won' };
+  return {
+    prog: {
+      left: prog.left.filter(i => i !== sat),
+      stopAt: nowMs + p.pauseMs + chairsMusicMs(p, rand),
+      round: prog.round + 1,
+      sat,
+      safeUntil: nowMs + p.pauseMs,
+    },
+    event: 'safe',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Giant Keyboard
+// ---------------------------------------------------------------------------
+
+export type KeyboardSpec = (typeof STAGE_SPECS.keyboard)[number];
+export type Key = Rect & { ch: string };
+export type KeyboardParams = { word: string; keys: Key[]; dwellMs: number };
+/** onKey: key under the cursor ('' in a gap); since: when it got there; pressed: that key already fired (needs a re-entry). */
+export type KeyboardProgress = { next: number; onKey: string; since: number; pressed: boolean; buzzes: number };
+
+export const KEY_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+/** Word strip is above this; the three key rows fill the rest. */
+export const KEYBOARD_TOP = 2.1;
+
+export function keyboardLayout(): Key[] {
+  const gap = 0.12;
+  const w = (WORLD_W - 0.3 - gap * 9) / 10;
+  const h = (WORLD_H - 0.25 - KEYBOARD_TOP - gap * 2) / 3;
+  const keys: Key[] = [];
+  KEY_ROWS.forEach((row, r) => {
+    const x0 = (WORLD_W - (row.length * w + (row.length - 1) * gap)) / 2;
+    [...row].forEach((ch, c) => keys.push({ ch, x: x0 + c * (w + gap), y: KEYBOARD_TOP + r * (h + gap), w, h }));
+  });
+  return keys;
+}
+
+export function makeKeyboard(rand: Rand, sp: KeyboardSpec): { params: KeyboardParams; progress: KeyboardProgress } {
+  const word = sp.words[Math.floor(rand() * sp.words.length) % sp.words.length];
+  return { params: { word, keys: keyboardLayout(), dwellMs: sp.dwellMs }, progress: { next: 0, onKey: '', since: 0, pressed: false, buzzes: 0 } };
+}
+
+export function keyAt(keys: Key[], x: number, y: number): Key | null {
+  return keys.find(k => inRect(k, x, y)) ?? null;
+}
+
+/**
+ * One tick: dwelling on the next letter for dwellMs types it; dwelling on any
+ * other key buzzes once (until the cursor leaves it). Returns the same `prog`
+ * when nothing changed.
+ */
+export function keyboardStep(
+  p: KeyboardParams,
+  prog: KeyboardProgress,
+  nowMs: number,
+  cur: Vec
+): { prog: KeyboardProgress; event: 'key' | 'buzz' | null; won: boolean } {
+  const ch = keyAt(p.keys, cur.x, cur.y)?.ch ?? '';
+  let out = prog;
+  if (ch !== prog.onKey) out = { ...prog, onKey: ch, since: nowMs, pressed: false };
+  const want = p.word[out.next] ?? '';
+  // A fired key stays quiet until the cursor leaves, unless the same letter is wanted again (double letters).
+  if (!ch || (out.pressed && ch !== want) || nowMs - out.since < p.dwellMs) return { prog: out, event: null, won: false };
+  if (ch === want) {
+    out = { ...out, next: out.next + 1, since: nowMs, pressed: true };
+    return { prog: out, event: 'key', won: out.next >= p.word.length };
+  }
+  return { prog: { ...out, since: nowMs, pressed: true, buzzes: out.buzzes + 1 }, event: 'buzz', won: false };
 }
 
 // ---------------------------------------------------------------------------

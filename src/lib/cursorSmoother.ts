@@ -1,4 +1,4 @@
-import { integrate, WORLD_H, WORLD_W, type Body, type MazeProgress } from '../../spacetimedb/src/sim';
+import { integrate, WORLD_H, WORLD_W, type Body } from '../../spacetimedb/src/sim';
 import { serverNowMs } from './clock';
 
 type CursorRow = Body & {
@@ -14,10 +14,11 @@ const TELEPORT = 3;
 
 /**
  * Server ms until which the tick pins the cursor for this running level: the
- * pre-play countdown, and the maze respawn freeze. Prediction must not move it.
+ * pre-play countdown, and the respawn freeze after a maze bonk or a red-light
+ * fault (both store `frozenUntil` in progress). Prediction must not move it.
  */
 export function cursorHoldUntilMs(level: { kind: string; progress: unknown; playAt: number }): number {
-  const frozen = level.kind === 'maze' ? ((level.progress as Partial<MazeProgress>).frozenUntil ?? 0) : 0;
+  const frozen = (level.progress as { frozenUntil?: number } | null)?.frozenUntil ?? 0;
   return Math.max(level.playAt, frozen);
 }
 
