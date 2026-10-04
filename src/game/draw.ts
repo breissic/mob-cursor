@@ -49,18 +49,18 @@ export const FONT_DISPLAY = "'Bungee', 'Impact', sans-serif";
 export const FONT_PIXEL = "'VT323', ui-monospace, monospace";
 
 export const GAME_META: Record<string, { exe: string; title: string; color: string; goal: string }> = {
-  targets: { exe: 'CLICKFEST.EXE', title: 'Clickfest', color: '#ff5a36', goal: 'Hit every numbered target in order before the clock runs out.' },
-  maze: { exe: 'MAZE.EXE', title: 'The Maze', color: '#2ec4b6', goal: 'Reach the trophy. Touch a wall = back to start.' },
+  targets: { exe: 'CLICKFEST.EXE', title: 'Clickfest', color: '#ff5a36', goal: 'Hit every numbered target in order. Touch the WRONG number = a strike; three and you are out.' },
+  maze: { exe: 'MAZE.EXE', title: 'The Maze', color: '#2ec4b6', goal: 'Reach the trophy. Touch a wall = back to start, and you only get a few bonks.' },
   minesweeper: { exe: 'MINES.EXE', title: 'Mob Sweeper', color: '#3a86ff', goal: 'Nobody clicks. The cursor clicks BY ITSELF on a random fuse: park it on a safe cell before it fires 💣' },
   redlight: { exe: 'REDLIGHT.EXE', title: 'Red Light, Green Light', color: '#43b047', goal: 'Walk the doll to the end: she only moves on GREEN with the cursor close to her. Move on RED and she gets dragged back.' },
   balloon: { exe: 'BALLOON.EXE', title: 'Keep It Up', color: '#4dabf7', goal: 'Get under the balloon to bop it up. Rack up the saves; too many drops and you are out.' },
   mole: { exe: 'WHACK.EXE', title: 'Whack-a-Mole', color: '#8b5a2b', goal: 'Be ON the mole when it ducks back down. Too many misses = game over.' },
   potato: { exe: 'POTATO.EXE', title: 'Hot Potato', color: '#f08c00', goal: 'The cursor is a hot potato. Deliver it bucket after bucket before each fuse hits zero!' },
   chairs: { exe: 'CHAIRS.EXE', title: 'Musical Chairs', color: '#da77f2', goal: 'When the music stops, be on a chair. A chair goes each round. Sit on the last one!' },
-  keyboard: { exe: 'KEYBOARD.EXE', title: 'Giant Keyboard', color: '#5c7cfa', goal: 'Type the phrase: hold the cursor on each letter in order. Wrong key = BZZT.' },
-  hunt: { exe: 'HUNT.EXE', title: 'Warmer, Colder', color: '#e8590c', goal: 'Something is hidden. The meter only says warmer or colder. Find it and HOLD STILL on it.' },
+  keyboard: { exe: 'KEYBOARD.EXE', title: 'Giant Keyboard', color: '#5c7cfa', goal: 'Type the phrase: hold the cursor on each letter in order. Wrong key = a typo; too many and you are out.' },
+  hunt: { exe: 'HUNT.EXE', title: 'Warmer, Colder', color: '#e8590c', goal: 'Something is hidden. The meter only says warmer or colder. Find it and HOLD STILL on it. Decoys feel WARM but never BOIL: sit on one and the trap springs.' },
   valves: { exe: 'VALVES.EXE', title: 'Pressure Room', color: '#0ca678', goal: 'Every gauge must sit in the green at once. Holding a valve fills it; the others leak. Keep them all green for the hold.' },
-  stations: { exe: 'STATIONS.EXE', title: 'Grand Tour', color: '#7048e8', goal: 'Visit the numbered stops in order and wait at each one. Leave early and that stop is cancelled.' },
+  stations: { exe: 'STATIONS.EXE', title: 'Grand Tour', color: '#7048e8', goal: 'Visit the numbered stops in order and wait at each one. Leave early = a strike; too many and the tour is over.' },
   vote: { exe: 'PICK.EXE', title: 'Pick the next game', color: '#ff4fa3', goal: 'Park the cursor INSIDE a card. It is EXTRA strong right now. Time out = that game!' },
   lobby: { exe: 'LOBBY.EXE', title: 'Lobby', color: '#ffd23f', goal: 'Scan the QR code to join.' },
 };
@@ -371,8 +371,20 @@ function drawTargets(g: CanvasRenderingContext2D, p: TargetsParams, prog: Target
         g.fill();
       }
     }
-    if (detail || isNext) sticker(g, pos.x + p.r * 0.75, pos.y - p.r * 0.75, String(i + 1), isNext ? 0.42 : 0.3, isNext ? '#ffd23f' : '#fff', '#111', px);
+    if (i === prog.on) {
+      // Sitting on the wrong number: red alarm ring.
+      g.strokeStyle = Math.floor(ms / 120) % 2 ? '#ff3b3b' : '#fff';
+      g.lineWidth = 4 * px;
+      g.beginPath();
+      g.arc(pos.x, pos.y, p.r * 1.15, 0, Math.PI * 2);
+      g.stroke();
+    }
+    if (detail || isNext) sticker(g, pos.x + p.r * 0.75, pos.y - p.r * 0.75, String(i + 1), isNext ? 0.42 : 0.3, isNext ? '#ffd23f' : i === prog.on ? '#ff3b3b' : '#fff', i === prog.on ? '#fff' : '#111', px);
   });
+  if (detail && p.strikeCap) {
+    const hot = prog.strikes >= p.strikeCap - 1;
+    sticker(g, 1.6, 0.6, `STRIKES ${prog.strikes}/${p.strikeCap}`, 0.3, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+  }
 }
 
 function drawMaze(g: CanvasRenderingContext2D, m: MazeParams, prog: MazeProgress, px: number, ms: number) {
@@ -1158,7 +1170,10 @@ function drawKeyboard(g: CanvasRenderingContext2D, p: KeyboardParams, prog: Keyb
   if (detail) {
     const hint = prog.next >= n ? 'DONE!' : `HOLD ON "${want}"`;
     worldText(g, hint, WORLD_W - 0.3, 2.05, 0.36, { fill: '#5c7cfa', stroke: '#111', strokeW: 0.1, align: 'right', baseline: 'middle' });
-    if (prog.buzzes) sticker(g, 1.1, 2.05, `BZZT ×${prog.buzzes}`, 0.26, '#ffffff', '#111', px);
+    if (p.typoCap) {
+      const hot = prog.buzzes >= p.typoCap - 1;
+      sticker(g, 1.3, 2.05, `TYPOS ${prog.buzzes}/${p.typoCap}`, 0.28, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    }
   }
 }
 
@@ -1286,6 +1301,21 @@ function drawHunt(g: CanvasRenderingContext2D, p: HuntParams, prog: HuntProgress
     g.arc(f.x, f.y, p.radius, 0, Math.PI * 2);
     g.stroke();
   }
+  // Sprung decoys stay on the map as a warning.
+  for (const t of prog.sprung ?? []) {
+    g.strokeStyle = 'rgba(255,59,59,0.85)';
+    g.lineWidth = 4 * px;
+    g.beginPath();
+    g.arc(t.x, t.y, p.radius, 0, Math.PI * 2);
+    g.stroke();
+    const k = p.radius * 0.5;
+    g.beginPath();
+    g.moveTo(t.x - k, t.y - k);
+    g.lineTo(t.x + k, t.y + k);
+    g.moveTo(t.x + k, t.y - k);
+    g.lineTo(t.x - k, t.y + k);
+    g.stroke();
+  }
   // The meter is the whole game: hot means close, and it is noisy on purpose.
   const hot = prog.bars >= HUNT_BARS - 1;
   heatMeter(g, WORLD_W / 2, 0.85, 5.2, 0.9, prog.bars, px);
@@ -1296,6 +1326,11 @@ function drawHunt(g: CanvasRenderingContext2D, p: HuntParams, prog: HuntProgress
     const frac = clamp((ms - prog.dwellSince) / (p.dwellS * 1000), 0, 1);
     dwellRing(g, cursor.x, cursor.y, p.radius, frac, '#ffd23f', px);
     sticker(g, cursor.x, cursor.y - p.radius - 0.4, `HOLD STILL ${Math.ceil(p.dwellS - frac * p.dwellS)}`, 0.3, '#ffd23f', '#111', px);
+  } else if (prog.trapSince > 0) {
+    // Sitting on a decoy: the ring fills red — get off before it springs.
+    const frac = clamp((ms - prog.trapSince) / (p.dwellS * 1000), 0, 1);
+    dwellRing(g, cursor.x, cursor.y, p.radius, frac, '#ff3b3b', px);
+    sticker(g, cursor.x, cursor.y - p.radius - 0.4, 'NOT BOILING — MOVE!', 0.3, '#ff3b3b', '#fff', px);
   } else if (hot) {
     g.save();
     g.setLineDash([0.1, 0.1]);
@@ -1308,7 +1343,11 @@ function drawHunt(g: CanvasRenderingContext2D, p: HuntParams, prog: HuntProgress
   }
   if (detail) {
     sticker(g, WORLD_W - 2.0, 0.85, `FOUND ${prog.found.length}/${p.finds}`, 0.36, '#ffffff', '#111', px);
-    if (p.decoys > 0) worldText(g, `${p.decoys} DECOY${p.decoys === 1 ? '' : 'S'} · NEVER BOILING`, 0.4, 1.55, 0.26, { fill: 'rgba(255,255,255,0.7)', stroke: '#111', strokeW: 0.07, baseline: 'middle' });
+    if (p.trapCap) {
+      const hotT = (prog.traps ?? 0) >= p.trapCap - 1;
+      sticker(g, WORLD_W - 2.0, 1.55, `TRAPS ${prog.traps ?? 0}/${p.trapCap}`, 0.3, hotT ? '#ff3b3b' : '#ffffff', hotT ? '#fff' : '#111', px);
+    }
+    if (p.decoys > 0) worldText(g, `${p.decoys} DECOY${p.decoys === 1 ? '' : 'S'} · WARM BUT NEVER BOILING · SIT ON ONE = TRAP`, 0.4, 1.55, 0.26, { fill: 'rgba(255,255,255,0.7)', stroke: '#111', strokeW: 0.07, baseline: 'middle' });
   }
 }
 
@@ -1433,7 +1472,10 @@ function drawStations(g: CanvasRenderingContext2D, p: StationsParams, prog: Stat
       g.stroke();
     }
     sticker(g, WORLD_W - 1.9, 0.6, `STOP ${Math.min(prog.next + 1, n)}/${n}`, 0.36, '#ffffff', '#111', px);
-    if (prog.cancels) sticker(g, 1.4, 0.6, `LEFT EARLY ×${prog.cancels}`, 0.26, '#ffffff', '#111', px);
+    if (p.skipCap) {
+      const hot = prog.cancels >= p.skipCap - 1;
+      sticker(g, 1.6, 0.6, `LEFT EARLY ${prog.cancels}/${p.skipCap}`, 0.28, hot ? '#ff3b3b' : '#ffffff', hot ? '#fff' : '#111', px);
+    }
   }
 }
 

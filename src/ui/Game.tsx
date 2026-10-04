@@ -80,12 +80,21 @@ export function GameStatus({ level, now, cursor }: { level: LevelRow; now: numbe
   switch (level.kind) {
     case 'targets':
       return (
-        <span className="chip">
-          <img src={spriteUrl('star')} alt="" style={{ height: 16 }} /> {prog.next}/{p.targets.length}
-        </span>
+        <>
+          <span className="chip">
+            <img src={spriteUrl('star')} alt="" style={{ height: 16 }} /> {prog.next}/{p.targets.length}
+          </span>
+          <span className="chip" style={{ background: prog.strikes >= p.strikeCap - 1 ? '#ff3b3b' : '#fff', color: prog.strikes >= p.strikeCap - 1 ? '#fff' : '#111' }}>
+            STRIKES {prog.strikes}/{p.strikeCap}
+          </span>
+        </>
       );
     case 'maze':
-      return <span className="chip">BONKS {prog.hits}</span>;
+      return (
+        <span className="chip" style={{ background: prog.hits >= p.bonkCap - 1 ? '#ff3b3b' : '#fff', color: prog.hits >= p.bonkCap - 1 ? '#fff' : '#111' }}>
+          BONKS {prog.hits}/{p.bonkCap}
+        </span>
+      );
     case 'vote': {
       // The client only names the card the cursor is inside; the server decides.
       const pick = cursor ? voteHover(p.cards, cursor.x, cursor.y) : null;
@@ -153,10 +162,15 @@ export function GameStatus({ level, now, cursor }: { level: LevelRow; now: numbe
     }
     case 'keyboard':
       return (
-        <span className="chip" style={{ fontFamily: 'var(--pixel)', letterSpacing: 2 }}>
-          {String(p.word).slice(0, prog.next)}
-          <span style={{ opacity: 0.4 }}>{String(p.word).slice(prog.next)}</span>
-        </span>
+        <>
+          <span className="chip" style={{ fontFamily: 'var(--pixel)', letterSpacing: 2 }}>
+            {String(p.word).slice(0, prog.next)}
+            <span style={{ opacity: 0.4 }}>{String(p.word).slice(prog.next)}</span>
+          </span>
+          <span className="chip" style={{ background: prog.buzzes >= p.typoCap - 1 ? '#ff3b3b' : '#fff', color: prog.buzzes >= p.typoCap - 1 ? '#fff' : '#111' }}>
+            TYPOS {prog.buzzes}/{p.typoCap}
+          </span>
+        </>
       );
     case 'minesweeper': {
       const fuse = prog.nextAutoAt ? Math.max(0, (prog.nextAutoAt - now) / 1000) : null;
@@ -180,6 +194,9 @@ export function GameStatus({ level, now, cursor }: { level: LevelRow; now: numbe
             {word}
           </span>
           {prog.dwellSince > 0 && <span className="chip" style={{ background: '#ffd23f' }}>HOLD {secs(prog.dwellSince + p.dwellS * 1000 - now)}</span>}
+          <span className="chip" style={{ background: prog.traps >= p.trapCap - 1 ? '#ff3b3b' : '#fff', color: prog.traps >= p.trapCap - 1 ? '#fff' : '#111' }}>
+            TRAPS {prog.traps ?? 0}/{p.trapCap}
+          </span>
         </>
       );
     }
@@ -205,6 +222,9 @@ export function GameStatus({ level, now, cursor }: { level: LevelRow; now: numbe
             STOP {Math.min(prog.next + 1, p.stations.length)}/{p.stations.length}
           </span>
           {prog.since > 0 && <span className="chip" style={{ background: '#ffd23f' }}>STAY {secs(prog.since + p.dwellS * 1000 - now)}</span>}
+          <span className="chip" style={{ background: prog.cancels >= p.skipCap - 1 ? '#ff3b3b' : '#fff', color: prog.cancels >= p.skipCap - 1 ? '#fff' : '#111' }}>
+            LEFT EARLY {prog.cancels}/{p.skipCap}
+          </span>
         </>
       );
   }
@@ -218,9 +238,9 @@ export function objectiveOf(level: LevelRow | null | undefined, now: number): st
   const prog = JSON.parse(level.progress);
   switch (level.kind) {
     case 'targets':
-      return `Hit target ${prog.next + 1} of ${p.targets.length}`;
+      return `Hit target ${prog.next + 1} of ${p.targets.length} — touch no other`;
     case 'maze':
-      return 'Reach the flag — no walls';
+      return `Reach the flag — ${p.bonkCap - prog.hits} bonk${p.bonkCap - prog.hits === 1 ? '' : 's'} left`;
     case 'vote':
       return 'Park the cursor on a card';
     case 'redlight':
@@ -234,15 +254,15 @@ export function objectiveOf(level: LevelRow | null | undefined, now: number): st
     case 'chairs':
       return now < prog.safeUntil ? 'Safe! A chair is gone' : 'Sit when the music stops';
     case 'keyboard':
-      return `Hold on "${String(p.word)[prog.next] ?? '…'}"`;
+      return `Hold on "${String(p.word)[prog.next] ?? '…'}" — wrong keys are typos`;
     case 'minesweeper':
       return 'Park over a safe cell before the auto-click';
     case 'hunt':
-      return prog.dwellSince > 0 ? 'Hold still!' : 'Follow the heat meter';
+      return prog.dwellSince > 0 ? 'Hold still!' : prog.trapSince > 0 ? 'WARM, not BOILING — it’s a trap, move!' : 'Follow the heat meter — only BOILING is real';
     case 'valves':
       return prog.allInSince > 0 ? 'Hold every gauge green' : 'Hold a valve to raise it';
     case 'stations':
-      return prog.since > 0 ? 'Stay on the station' : `Go to station ${Math.min(prog.next + 1, p.stations.length)}`;
+      return prog.since > 0 ? 'Stay on the station — leaving early is a strike' : `Go to station ${Math.min(prog.next + 1, p.stations.length)}`;
   }
   return '';
 }

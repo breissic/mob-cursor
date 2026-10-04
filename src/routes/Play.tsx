@@ -4,6 +4,7 @@ import { useConnState, usePoll, useRows } from '../lib/stdb';
 import { useRoomByCode, useSubscribe } from '../lib/room';
 import { observeClock, serverNowMs } from '../lib/clock';
 import { createCursorSmoother, cursorHoldUntilMs } from '../lib/cursorSmoother';
+import { countdownBeep, disableSound, enableSound, sfx } from '../display/audio';
 import { roomCodeFromUrl, setRoomInUrl } from '../config';
 import { COLORS, cursorPhysics, DEFAULT_ROOM_CODE, ghostKey, normalizeRoomCode, STAGES, unpackGhosts, WORLD_H, WORLD_W } from '../../spacetimedb/src/sim';
 import { drawField, drawLevel, GAME_META, parseLevel, type LevelView } from '../game/draw';
@@ -13,6 +14,7 @@ import { fmt, GameStatus, Intro, objectiveOf, phaseOf, Results, RULE_LABEL, Stag
 
 const NAME_KEY = 'mob-cursor/name';
 const JOINED_KEY = 'mob-cursor/joined';
+const SOUND_KEY = 'mob-cursor/sound';
 const DEADBAND = 0.004; // 0.4% of the pad
 const HEARTBEAT_MS = 1000;
 /** ghost_frame is written every 3rd tick; ghosts glide to each frame over this long. */
@@ -119,6 +121,8 @@ export default function Play() {
     try {
       localStorage.setItem(NAME_KEY, name);
       localStorage.setItem(JOINED_KEY, '1');
+      // The tap that joins is the user gesture that unlocks WebAudio on phones.
+      if (localStorage.getItem(SOUND_KEY) !== '0') enableSound();
     } catch {
       /* ignore */
     }
@@ -239,6 +243,26 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
   const wrapRef = useRef<HTMLDivElement>(null);
   const finger = useRef<{ x: number; y: number } | null>(null);
   const [sent, setSent] = useState(0);
+  const [sound, setSound] = useState(() => {
+    try {
+      return localStorage.getItem(SOUND_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const soundRef = useRef(sound);
+  soundRef.current = sound;
+  const toggleSound = () => {
+    const next = !sound;
+    setSound(next);
+    if (next) enableSound();
+    else disableSound();
+    try {
+      localStorage.setItem(SOUND_KEY, next ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  };
 
   // Called on every finger move; the sender effect swaps in the real pump.
   const pump = useRef<() => void>(() => {});
@@ -284,10 +308,11 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
     };
   }, [conn, roomId]);
 
-  // Haptics + flash on big moments (our room only; a room switch can race the subscription).
+  // Haptics + sound + flash on big moments (our room only; a room switch can race the subscription).
   useEffect(() => {
     const onFx = (_c: unknown, row: { roomId: number; kind: string }) => {
       if (row.roomId !== roomId) return;
+      if (row.kind !== 'vote' && soundRef.current) sfx(row.kind);
       const v: Record<string, number | number[]> = {
         mine: [90, 40, 90],
         wall: [60, 30, 60],
@@ -469,6 +494,16 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
   }, 250);
 
   const { meta, running, endedMs, inIntro, inResults, inLobby, countdown, timeLeft } = phaseOf(current, now);
+  const lastCount = useRef(0);
+  useEffect(() => {
+    if (countdown !== lastCount.current) {
+      if (soundRef.current) {
+        if (countdown > 0) countdownBeep(false);
+        else if (lastCount.current > 0) countdownBeep(true);
+      }
+      lastCount.current = countdown;
+    }
+  }, [countdown]);
   const gm = GAME_META[current && !inLobby ? current.kind : 'lobby'] ?? GAME_META.lobby;
   const ruleTitle = RULE_LABEL[config?.rule ?? 'mean']?.[0] ?? config?.rule ?? '';
   const objective = objectiveOf(current, now);
@@ -477,8 +512,10 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
   const shown = board.slice(0, 5);
   if (myRank >= 5) shown.push(board[myRank]);
 
+  // Finger position relative to the 16:9 world box (clamped), so the letterbox
+  // margins around it still steer instead of being dead space.
   const toNorm = (e: React.PointerEvent) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const r = canvasRef.current!.getBoundingClientRect();
     return {
       x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
@@ -509,22 +546,26 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
           </div>
           <div className="phone-objective">{inLobby ? `ROOM ${room.code} · waiting for the host…` : objective || (inIntro ? 'Get ready…' : inResults ? 'Round over' : '')}</div>
         </div>
-        <div className="pad-wrap" ref={wrapRef}>
-          <canvas
-            ref={canvasRef}
-            className="pad"
-            onPointerDown={e => {
-              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        {/* The whole dark area drags; the world inside stays a true 16:9 (never squashed by toolbars or the board). */}
+        <div
+          className="pad-wrap"
+          ref={wrapRef}
+          onPointerDown={e => {
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            if (soundRef.current) enableSound(); // first touch also unlocks audio
+            finger.current = toNorm(e);
+            pump.current();
+          }}
+          onPointerMove={e => {
+            if (e.pointerType === 'mouse' || e.buttons) {
               finger.current = toNorm(e);
               pump.current();
-            }}
-            onPointerMove={e => {
-              if (e.pointerType === 'mouse' || e.buttons) {
-                finger.current = toNorm(e);
-                pump.current();
-              }
-            }}
-          />
+            }
+          }}
+        >
+          <div className="pad-box">
+            <canvas ref={canvasRef} className="pad" />
+          </div>
           {inIntro && current && <Intro compact kind={current.kind} stage={meta.stage ?? 1} count={countdown} rule={ruleTitle} />}
           {inResults && current && (
             <Results
@@ -553,7 +594,12 @@ function Remote({ conn, me, room, selfKey }: { conn: DbConnection; me: PlayerRow
         </ol>
       </Win>
       <div className="phone-foot">
-        ROOM <b>{room.code}</b> · {room.players} playing · drag = pull the cursor · {sent}/s
+        <span>
+          ROOM <b>{room.code}</b> · {room.players} playing · drag = pull the cursor · {sent}/s
+        </span>
+        <button type="button" className={`sound-btn ${sound ? 'on' : ''}`} onClick={toggleSound} aria-pressed={sound}>
+          {sound ? '🔊' : '🔇'}
+        </button>
       </div>
     </div>
   );

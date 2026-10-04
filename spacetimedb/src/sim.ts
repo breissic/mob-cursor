@@ -338,109 +338,115 @@ export type SettingDef = {
 const S = (key: string, label: string, up: string, def: number, min: number, max: number, step: number): SettingDef => ({ key, label, up, def, min, max, step });
 
 /**
- * Defaults tuned so one stage is a few minutes of real work (about as long as
- * Mob Sweeper) and a stage-3 room can still fail.
+ * Party-length defaults: one stage is about a minute of real work (60-90 s
+ * limits), so a 3-stage game fits in a few minutes and the picker comes back
+ * around before anyone's phone locks. Admins can stretch any of these.
  */
 export const MODE_SETTINGS: Record<PlayKind, SettingDef[]> = {
   targets: [
-    S('n', 'Targets', 'more targets to hit, longer stage', 14, 4, 40, 1),
+    S('n', 'Targets', 'more targets to hit, longer stage', 8, 3, 40, 1),
     S('r', 'Target radius', 'bigger, easier targets', 0.75, 0.3, 1.5, 0.05),
     S('move', 'Target wobble', 'targets drift further from their spot', 0, 0, 3, 0.1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 60, 600, 10),
+    S('strikes', 'Wrong-target strikes', 'more out-of-order touches allowed before the stage fails', 3, 1, 20, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 75, 30, 600, 5),
   ],
   maze: [
-    S('cw', 'Maze width (cells)', 'wider maze, longer path, narrower corridors', 10, 4, 18, 1),
-    S('ch', 'Maze height (cells)', 'taller maze, longer path, narrower corridors', 5, 3, 9, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 60, 600, 10),
+    S('cw', 'Maze width (cells)', 'wider maze, longer path, narrower corridors', 8, 4, 18, 1),
+    S('ch', 'Maze height (cells)', 'taller maze, longer path, narrower corridors', 4, 3, 9, 1),
+    S('bonks', 'Wall bonks allowed', 'more wall hits allowed before the stage fails', 5, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   minesweeper: [
-    S('cols', 'Columns', 'more cells to clear', 9, 5, 20, 1),
+    S('cols', 'Columns', 'more cells to clear', 8, 5, 20, 1),
     S('rows', 'Rows', 'more cells to clear', 5, 3, 11, 1),
-    S('mines', 'Mines', 'more bombs, more danger', 6, 1, 80, 1),
+    S('mines', 'Mines', 'more bombs, more danger', 5, 1, 80, 1),
     S('autoMinS', 'Auto-click gap min (s)', 'longer quiet spell before the cursor clicks itself', 2, 0, 60, 1),
-    S('autoMaxS', 'Auto-click gap max (s)', 'random clicks spread further apart', 25, 1, 120, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 150, 60, 600, 10),
+    S('autoMaxS', 'Auto-click gap max (s)', 'random clicks spread further apart', 12, 1, 120, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   redlight: [
-    S('lanes', 'Path lanes', 'longer walk for the doll', 3, 1, 4, 1),
-    S('speed', 'Doll speed (u/s)', 'doll walks faster on green', 0.6, 0.2, 2, 0.05),
+    S('lanes', 'Path lanes', 'longer walk for the doll', 2, 1, 4, 1),
+    S('speed', 'Doll speed (u/s)', 'doll walks faster on green', 0.75, 0.2, 2, 0.05),
     S('leash', 'Leash radius', 'cursor may stray further from the doll and she still walks', 1.6, 0.4, 4, 0.1),
     S('greenMinS', 'Green window min (s)', 'longer green lights', 3, 0.5, 15, 0.5),
     S('greenMaxS', 'Green window max (s)', 'longer green lights', 5, 0.5, 20, 0.5),
-    S('redMinS', 'Red window min (s)', 'longer freezes', 2, 0.5, 15, 0.5),
-    S('redMaxS', 'Red window max (s)', 'longer freezes', 3.5, 0.5, 20, 0.5),
+    S('redMinS', 'Red window min (s)', 'longer freezes', 1.5, 0.5, 15, 0.5),
+    S('redMaxS', 'Red window max (s)', 'longer freezes', 3, 0.5, 20, 0.5),
     S('fakeP', 'Fake-out chance', 'more greens that die immediately', 0.15, 0, 0.9, 0.05),
     S('deadband', 'Red dead-band', 'more wiggle allowed on red before it counts as moving', 0.35, 0.05, 2, 0.05),
     S('graceMs', 'Red grace (ms)', 'longer settle time after red before movement counts', 600, 0, 3000, 50),
-    S('rewind', 'Rewind (units)', 'a fault sends the doll further back', 4, 0.5, 30, 0.5),
-    S('faults', 'Fault cap', 'more faults allowed before the stage fails', 6, 1, 30, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 210, 60, 600, 10),
+    S('rewind', 'Rewind (units)', 'a fault sends the doll further back', 3, 0.5, 30, 0.5),
+    S('faults', 'Fault cap', 'more faults allowed before the stage fails', 5, 1, 30, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   balloon: [
     S('n', 'Balloons', 'more balloons in the air at once', 1, 1, 4, 1),
     S('gravity', 'Gravity', 'balloons fall faster', 1.5, 0.3, 6, 0.1),
     S('wind', 'Wind', 'balloons drift sideways harder', 0, 0, 4, 0.1),
     S('drops', 'Lives', 'more drops allowed before the stage fails', 3, 1, 10, 1),
-    S('saves', 'Saves to win', 'more bops needed, longer stage', 40, 5, 200, 5),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('saves', 'Saves to win', 'more bops needed, longer stage', 20, 5, 200, 5),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 75, 30, 600, 5),
   ],
   mole: [
     S('holes', 'Holes', 'more holes to watch', 6, 2, 12, 1),
-    S('upMs', 'Mole window (ms)', 'moles stay up longer, easier', 2400, 400, 6000, 100),
-    S('gapMs', 'Gap between moles (ms)', 'longer breathers between moles', 700, 100, 3000, 100),
-    S('target', 'Whacks to win', 'more hits needed, longer stage', 35, 3, 150, 1),
-    S('misses', 'Miss cap', 'more misses allowed before the stage fails', 8, 1, 50, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 200, 60, 600, 10),
+    S('upMs', 'Mole window (ms)', 'moles stay up longer, easier', 2000, 400, 6000, 100),
+    S('gapMs', 'Gap between moles (ms)', 'longer breathers between moles', 600, 100, 3000, 100),
+    S('target', 'Whacks to win', 'more hits needed, longer stage', 15, 3, 150, 1),
+    S('misses', 'Miss cap', 'more misses allowed before the stage fails', 6, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 75, 30, 600, 5),
   ],
   potato: [
-    S('rounds', 'Deliveries', 'more buckets to reach in a row, longer stage', 8, 1, 30, 1),
-    S('fuseS', 'Fuse per delivery (s)', 'more time to reach each bucket', 20, 3, 60, 1),
+    S('rounds', 'Deliveries', 'more buckets to reach in a row, longer stage', 5, 1, 30, 1),
+    S('fuseS', 'Fuse per delivery (s)', 'more time to reach each bucket', 12, 3, 60, 1),
     S('r', 'Bucket radius', 'bigger, easier bucket', 1.5, 0.4, 3, 0.05),
     S('move', 'Bucket wander', 'bucket drifts around more', 0, 0, 4, 0.1),
   ],
   chairs: [
-    S('chairs', 'Chairs', 'more rounds (one chair goes per round), longer stage', 10, 2, 16, 1),
+    S('chairs', 'Chairs', 'more rounds (one chair goes per round), longer stage', 6, 2, 16, 1),
     S('w', 'Chair width', 'bigger, easier chairs', 2.0, 0.8, 4, 0.1),
     S('h', 'Chair height', 'bigger, easier chairs', 1.5, 0.6, 3, 0.1),
-    S('musicMinS', 'Music min (s)', 'longer rounds of music', 10, 1, 40, 1),
-    S('musicMaxS', 'Music max (s)', 'longer rounds of music', 16, 1, 60, 1),
+    S('musicMinS', 'Music min (s)', 'longer rounds of music', 5, 1, 40, 1),
+    S('musicMaxS', 'Music max (s)', 'longer rounds of music', 9, 1, 60, 1),
     S('warnS', 'Stop warning (s)', 'longer "music stopping" warning', 2, 0, 6, 0.1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   keyboard: [
-    S('dwellMs', 'Key dwell (ms)', 'must hold each letter longer', 1100, 200, 4000, 50),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('dwellMs', 'Key dwell (ms)', 'must hold each letter longer', 900, 200, 4000, 50),
+    S('typos', 'Typo cap', 'more wrong keys allowed before the stage fails', 4, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   hunt: [
-    S('finds', 'Targets to find', 'more hidden targets, longer stage', 5, 1, 20, 1),
+    S('finds', 'Targets to find', 'more hidden targets, longer stage', 3, 1, 20, 1),
     S('radius', 'Find radius', 'bigger hot spot, easier to dwell on', 1.2, 0.3, 3, 0.05),
-    S('dwellS', 'Dwell (s)', 'must sit on the target longer', 2, 0.5, 10, 0.5),
+    S('dwellS', 'Dwell (s)', 'must sit on the target longer', 1.5, 0.5, 10, 0.5),
     S('noise', 'Meter noise', 'warmer/colder reading jitters more', 0.08, 0, 0.4, 0.01),
-    S('decoys', 'Decoy warm spots', 'more fake warm spots that never get hot', 0, 0, 8, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('decoys', 'Decoy traps', 'more fake warm spots that never get hot; sitting on one springs it', 2, 0, 8, 1),
+    S('traps', 'Traps allowed', 'more sprung decoys allowed before the stage fails', 2, 1, 20, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   valves: [
     S('valves', 'Valves', 'more valves to juggle', 3, 1, 8, 1),
     S('drift', 'Drift (per s)', 'unheld valves fall out of the zone faster', 0.02, 0.005, 0.2, 0.005),
     S('fill', 'Fill rate (per s)', 'a held valve rises faster', 0.35, 0.05, 2, 0.05),
-    S('holdS', 'Hold to win (s)', 'all valves must stay in zone longer', 10, 2, 60, 1),
+    S('holdS', 'Hold to win (s)', 'all valves must stay in zone longer', 6, 2, 60, 1),
     S('blowCap', 'Blowout cap', 'more empty/overflow blowouts allowed before the stage fails', 3, 1, 20, 1),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 90, 30, 600, 5),
   ],
   stations: [
-    S('stations', 'Stations', 'more stops to visit in order, longer stage', 14, 2, 40, 1),
-    S('dwellS', 'Dwell per station (s)', 'must sit on each station longer', 3, 0.5, 10, 0.5),
+    S('stations', 'Stations', 'more stops to visit in order, longer stage', 8, 2, 40, 1),
+    S('dwellS', 'Dwell per station (s)', 'must sit on each station longer', 2, 0.5, 10, 0.1),
     S('r', 'Station radius', 'bigger, easier stations', 0.9, 0.3, 3, 0.05),
-    S('secs', 'Time limit (s)', 'more time before the stage fails', 180, 60, 600, 10),
+    S('skips', 'Early leaves allowed', 'more half-finished stops allowed before the stage fails', 3, 1, 50, 1),
+    S('secs', 'Time limit (s)', 'more time before the stage fails', 75, 30, 600, 5),
   ],
 };
 
 type StageRule = { mul?: [number, number]; add?: [number, number] };
 /** How stages 2 and 3 harden each knob on top of the (editable) stage-1 defaults. */
 export const STAGE_RULES: Record<PlayKind, Record<string, StageRule>> = {
-  targets: { n: { add: [4, 8] }, r: { mul: [0.8, 0.65] }, move: { add: [0.9, 1.6] }, secs: { add: [30, 60] } },
-  maze: { cw: { add: [3, 6] }, ch: { add: [2, 3] }, secs: { add: [30, 60] } },
-  minesweeper: { cols: { add: [3, 5] }, rows: { add: [2, 3] }, mines: { mul: [2.2, 3.3] }, autoMaxS: { mul: [0.8, 0.65] }, secs: { add: [30, 60] } },
+  targets: { n: { add: [4, 8] }, r: { mul: [0.8, 0.65] }, move: { add: [0.9, 1.6] }, strikes: { add: [0, -1] }, secs: { add: [15, 30] } },
+  maze: { cw: { add: [3, 6] }, ch: { add: [2, 3] }, bonks: { add: [-1, -2] }, secs: { add: [15, 30] } },
+  minesweeper: { cols: { add: [3, 5] }, rows: { add: [2, 3] }, mines: { mul: [2.2, 3.3] }, autoMaxS: { mul: [0.8, 0.65] }, secs: { add: [15, 30] } },
   redlight: {
     lanes: { add: [1, 1] },
     speed: { add: [0.05, 0.1] },
@@ -452,16 +458,16 @@ export const STAGE_RULES: Record<PlayKind, Record<string, StageRule>> = {
     deadband: { mul: [0.85, 0.7] },
     rewind: { add: [2, 4] },
     faults: { add: [-1, -2] },
-    secs: { add: [30, 60] },
+    secs: { add: [15, 30] },
   },
-  balloon: { n: { add: [0, 1] }, gravity: { add: [0.4, 0.7] }, wind: { add: [0.9, 1.3] }, saves: { add: [10, 20] }, secs: { add: [20, 40] } },
+  balloon: { n: { add: [0, 1] }, gravity: { add: [0.4, 0.7] }, wind: { add: [0.9, 1.3] }, saves: { add: [10, 20] }, secs: { add: [10, 20] } },
   mole: { holes: { add: [2, 4] }, upMs: { mul: [0.8, 0.63] }, target: { add: [5, 10] }, misses: { add: [-1, -2] }, secs: { add: [15, 30] } },
   potato: { rounds: { add: [2, 4] }, fuseS: { mul: [0.8, 0.65] }, r: { mul: [0.85, 0.7] }, move: { add: [1.8, 2.8] } },
-  chairs: { chairs: { add: [2, 4] }, w: { mul: [0.85, 0.75] }, h: { mul: [0.85, 0.75] }, musicMinS: { mul: [0.9, 0.8] }, musicMaxS: { mul: [0.9, 0.8] }, warnS: { mul: [0.65, 0.4] }, secs: { add: [30, 60] } },
-  keyboard: { dwellMs: { mul: [0.82, 0.68] }, secs: { add: [30, 60] } },
-  hunt: { finds: { add: [1, 2] }, radius: { mul: [0.83, 0.67] }, dwellS: { add: [0.5, 1] }, noise: { add: [0.04, 0.07] }, decoys: { add: [2, 3] }, secs: { add: [30, 60] } },
-  valves: { valves: { add: [1, 2] }, drift: { add: [0.005, 0.008] }, holdS: { add: [2, 5] }, secs: { add: [30, 60] } },
-  stations: { stations: { add: [2, 4] }, dwellS: { mul: [0.83, 0.73] }, r: { mul: [0.89, 0.78] }, secs: { add: [20, 40] } },
+  chairs: { chairs: { add: [2, 4] }, w: { mul: [0.85, 0.75] }, h: { mul: [0.85, 0.75] }, musicMinS: { mul: [0.9, 0.8] }, musicMaxS: { mul: [0.9, 0.8] }, warnS: { mul: [0.65, 0.4] }, secs: { add: [15, 30] } },
+  keyboard: { dwellMs: { mul: [0.82, 0.68] }, typos: { add: [-1, -2] }, secs: { add: [15, 30] } },
+  hunt: { finds: { add: [1, 2] }, radius: { mul: [0.83, 0.67] }, dwellS: { add: [0.5, 1] }, noise: { add: [0.04, 0.07] }, decoys: { add: [1, 2] }, traps: { add: [0, -1] }, secs: { add: [15, 30] } },
+  valves: { valves: { add: [1, 2] }, drift: { add: [0.005, 0.008] }, holdS: { add: [2, 5] }, secs: { add: [15, 30] } },
+  stations: { stations: { add: [2, 4] }, dwellS: { mul: [0.83, 0.73] }, r: { mul: [0.89, 0.78] }, skips: { add: [0, -1] }, secs: { add: [10, 20] } },
 };
 
 function snap(def: SettingDef, v: number) {
@@ -605,8 +611,11 @@ export type TargetsParams = {
   r: number;
   /** Wobble amplitude in world units (0 = static targets). */
   move?: number;
+  /** Out-of-order touches allowed before the stage is lost. */
+  strikeCap: number;
 };
-export type TargetsProgress = { next: number };
+/** on: the wrong target the cursor is currently sitting on (-1 = none); it strikes once per entry. */
+export type TargetsProgress = { next: number; strikes: number; on: number };
 
 /** Target position at `t` seconds after play starts (same math on server and client). */
 export function targetPos(p: TargetsParams, i: number, t: number): Vec {
@@ -620,22 +629,60 @@ export function targetPos(p: TargetsParams, i: number, t: number): Vec {
   };
 }
 
-/** `n` points, each at least `minHop` away from the previous one so the crowd has to travel. */
-export function scatter(rand: Rand, n: number, minHop: number, margin: number): { x: number; y: number; ph: number }[] {
+/**
+ * `n` points, each at least `minHop` away from the previous one so the crowd has
+ * to travel, and at least `minGap` away from every other one so "touch the wrong
+ * one" rules are fair (nothing hides under something else).
+ */
+export function scatter(rand: Rand, n: number, minHop: number, margin: number, minGap = 0): { x: number; y: number; ph: number }[] {
   const out: { x: number; y: number; ph: number }[] = [];
   let guard = 0;
   let hop = minHop;
+  let gap = minGap;
   while (out.length < n && guard++ < 4000) {
-    if (guard % 200 === 0) hop *= 0.8; // never spin forever on a tiny field
+    if (guard % 200 === 0) {
+      // Never spin forever on a tiny field.
+      hop *= 0.8;
+      gap *= 0.8;
+    }
     const p = { x: margin + rand() * (WORLD_W - 2 * margin), y: margin + rand() * (WORLD_H - 2 * margin) };
     const prev = out[out.length - 1] ?? { x: WORLD_W / 2, y: WORLD_H / 2 };
-    if (Math.hypot(p.x - prev.x, p.y - prev.y) > hop) out.push({ ...p, ph: rand() * Math.PI * 2 });
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > hop && out.every(o => Math.hypot(p.x - o.x, p.y - o.y) > gap)) out.push({ ...p, ph: rand() * Math.PI * 2 });
   }
   return out;
 }
 
-export function makeTargets(rand: Rand, n = 6, r = 0.6, move = 0): TargetsParams {
-  return { targets: scatter(rand, n, 4.5, 1.2), r, move };
+export function makeTargets(rand: Rand, n = 6, r = 0.6, move = 0, strikeCap = 3): TargetsParams {
+  return { targets: scatter(rand, n, 4.5, 1.2, 2 * r + 0.6), r, move, strikeCap };
+}
+
+/**
+ * One tick. Touching the next target hits it; touching any other un-hit target
+ * (while not on the right one) is a strike, once per visit. Returns the same
+ * `prog` when nothing changed; `at` is where the hit/zap happened.
+ */
+export function targetsStep(p: TargetsParams, prog: TargetsProgress, t: number, cur: Vec): { prog: TargetsProgress; event: 'hit' | 'zap' | null; at: Vec | null; won: boolean } {
+  const n = p.targets.length;
+  if (prog.next >= n) return { prog, event: null, at: null, won: true };
+  const tg = targetPos(p, prog.next, t);
+  if (dist(cur, tg) <= p.r) {
+    const next = prog.next + 1;
+    return { prog: { next, strikes: prog.strikes, on: -1 }, event: 'hit', at: tg, won: next >= n };
+  }
+  // Wrong ones (a hair smaller than the real hit radius so grazing a rim is not a strike).
+  let on = -1;
+  let at: Vec | null = null;
+  for (let i = prog.next + 1; i < n; i++) {
+    const q = targetPos(p, i, t);
+    if (dist(cur, q) <= p.r * 0.9) {
+      on = i;
+      at = q;
+      break;
+    }
+  }
+  if (on === prog.on) return { prog, event: null, at: null, won: false };
+  if (on < 0) return { prog: { ...prog, on: -1 }, event: null, at: null, won: false };
+  return { prog: { ...prog, strikes: prog.strikes + 1, on }, event: 'zap', at, won: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -649,12 +696,14 @@ export type MazeParams = {
   tiles: string;
   start: { c: number; r: number };
   goal: { c: number; r: number };
+  /** Wall hits allowed before the stage is lost. */
+  bonkCap: number;
 };
 /** frozenUntil: unix ms; the cursor is held at the start after a bonk. */
 export type MazeProgress = { hits: number; frozenUntil: number };
 
 /** Recursive-backtracker maze on a (2w+1) x (2h+1) tile grid. */
-export function makeMaze(rand: Rand, cw = 7, ch = 4): MazeParams {
+export function makeMaze(rand: Rand, cw = 7, ch = 4, bonkCap = 5): MazeParams {
   const cols = cw * 2 + 1;
   const rows = ch * 2 + 1;
   const g: string[] = new Array(cols * rows).fill('#');
@@ -697,6 +746,7 @@ export function makeMaze(rand: Rand, cw = 7, ch = 4): MazeParams {
     tiles: g.join(''),
     start: { c: 1, r: 1 },
     goal: { c: cols - 2, r: rows - 2 },
+    bonkCap,
   };
 }
 
@@ -1275,7 +1325,8 @@ export function chairsStep(
 // ---------------------------------------------------------------------------
 
 export type Key = Rect & { ch: string };
-export type KeyboardParams = { word: string; keys: Key[]; dwellMs: number };
+/** typoCap: wrong-key buzzes allowed before the stage is lost. */
+export type KeyboardParams = { word: string; keys: Key[]; dwellMs: number; typoCap: number };
 /** onKey: key under the cursor ('' in a gap); since: when it got there; pressed: that key already fired (needs a re-entry). */
 export type KeyboardProgress = { next: number; onKey: string; since: number; pressed: boolean; buzzes: number };
 
@@ -1305,7 +1356,7 @@ export function keyboardLayout(): Key[] {
 export function makeKeyboard(rand: Rand, sp: ModeSettings, stage: number): { params: KeyboardParams; progress: KeyboardProgress } {
   const list = KEYBOARD_PHRASES[clamp(Math.round(stage), 1, KEYBOARD_PHRASES.length) - 1];
   const word = list[Math.floor(rand() * list.length) % list.length];
-  return { params: { word, keys: keyboardLayout(), dwellMs: sp.dwellMs }, progress: { next: 0, onKey: '', since: 0, pressed: false, buzzes: 0 } };
+  return { params: { word, keys: keyboardLayout(), dwellMs: sp.dwellMs, typoCap: sp.typos }, progress: { next: 0, onKey: '', since: 0, pressed: false, buzzes: 0 } };
 }
 
 export function keyAt(keys: Key[], x: number, y: number): Key | null {
@@ -1347,9 +1398,14 @@ export function keyboardStep(
 // dwell on the spot. The target lives in the private level secret.
 // ---------------------------------------------------------------------------
 
-export type HuntParams = { finds: number; radius: number; dwellS: number; noise: number; decoys: number };
-/** found: revealed positions of targets already found. bars: 0..HUNT_BARS meter reading (noisy, updated every HUNT_METER_MS). */
-export type HuntProgress = { found: Vec[]; bars: number; barsAt: number; dwellSince: number };
+/** trapCap: decoys the mob may sit on (and spring) before the stage is lost. */
+export type HuntParams = { finds: number; radius: number; dwellS: number; noise: number; decoys: number; trapCap: number };
+/**
+ * found: revealed positions of targets already found. bars: 0..HUNT_BARS meter
+ * reading (noisy, updated every HUNT_METER_MS). sprung: decoys the mob sat on
+ * for the dwell (revealed as traps); trapSince: when it started sitting on one.
+ */
+export type HuntProgress = { found: Vec[]; bars: number; barsAt: number; dwellSince: number; sprung: Vec[]; traps: number; trapSince: number };
 export type HuntSecret = { target: Vec; decoys: Vec[] };
 export const HUNT_BARS = 10;
 export const HUNT_METER_MS = 400;
@@ -1368,9 +1424,9 @@ function huntSpot(rand: Rand, avoid: Vec[], minGap: number): Vec {
 }
 
 export function makeHunt(rand: Rand, sp: ModeSettings, playAt: number): { params: HuntParams; progress: HuntProgress; secret: HuntSecret } {
-  const params: HuntParams = { finds: sp.finds, radius: sp.radius, dwellS: sp.dwellS, noise: sp.noise, decoys: sp.decoys };
+  const params: HuntParams = { finds: sp.finds, radius: sp.radius, dwellS: sp.dwellS, noise: sp.noise, decoys: sp.decoys, trapCap: sp.traps };
   const secret = huntSecret(rand, params, [{ x: WORLD_W / 2, y: WORLD_H / 2 }]);
-  return { params, progress: { found: [], bars: 0, barsAt: playAt, dwellSince: 0 }, secret };
+  return { params, progress: { found: [], bars: 0, barsAt: playAt, dwellSince: 0, sprung: [], traps: 0, trapSince: 0 }, secret };
 }
 
 /** A fresh target (away from `avoid`) plus decoys well away from it. */
@@ -1389,7 +1445,7 @@ export function huntHeat(p: HuntParams, s: HuntSecret, cur: Vec): number {
   return Math.max(real, decoy);
 }
 
-export type HuntEvent = 'found' | 'reset' | null;
+export type HuntEvent = 'found' | 'reset' | 'trap' | null;
 
 /**
  * One tick. Dwelling inside the radius for dwellS finds the target (a new one
@@ -1413,7 +1469,7 @@ export function huntStep(
     if (!prog.dwellSince) out = { ...out, dwellSince: nowMs };
     else if (nowMs - prog.dwellSince >= p.dwellS * 1000) {
       const found = [...prog.found, { x: +secret.target.x.toFixed(2), y: +secret.target.y.toFixed(2) }];
-      out = { ...out, found, dwellSince: 0, bars: 0, barsAt: nowMs };
+      out = { ...out, found, dwellSince: 0, trapSince: 0, bars: 0, barsAt: nowMs };
       sec = huntSecret(rand, p, [secret.target, cur]);
       event = 'found';
       return { prog: out, secret: sec, event, won: found.length >= p.finds };
@@ -1422,6 +1478,21 @@ export function huntStep(
     out = { ...out, dwellSince: 0 };
     event = 'reset';
   }
+  // Decoys read warm but never boil; sitting on one for the dwell springs the trap.
+  const trapIdx = inside ? -1 : secret.decoys.findIndex(d => dist(cur, d) <= p.radius);
+  if (trapIdx >= 0) {
+    if (!prog.trapSince) out = { ...out, trapSince: nowMs };
+    else if (nowMs - prog.trapSince >= p.dwellS * 1000) {
+      const d = secret.decoys[trapIdx];
+      const sprung = [...prog.sprung, { x: +d.x.toFixed(2), y: +d.y.toFixed(2) }];
+      // The sprung decoy is replaced elsewhere so the field stays as treacherous.
+      const decoys = secret.decoys.filter((_, i) => i !== trapIdx);
+      decoys.push(huntSpot(rand, [secret.target, cur, ...decoys, ...sprung], 3));
+      sec = { ...secret, decoys };
+      out = { ...out, sprung, traps: prog.traps + 1, trapSince: 0 };
+      return { prog: out, secret: sec, event: 'trap', won: false };
+    }
+  } else if (prog.trapSince) out = { ...out, trapSince: 0 };
   if (nowMs - prog.barsAt >= HUNT_METER_MS) {
     const heat = clamp(huntHeat(p, secret, cur) + (rand() - 0.5) * 2 * p.noise, 0, 1);
     const bars = Math.round(heat * HUNT_BARS);
@@ -1518,20 +1589,29 @@ export function valvesStep(p: ValvesParams, prog: ValvesProgress, nowMs: number,
 // Stations: visit the numbered stops in order, dwelling on each.
 // ---------------------------------------------------------------------------
 
-export type StationsParams = { stations: Vec[]; r: number; dwellS: number };
+/** skipCap: early leaves allowed before the stage is lost. */
+export type StationsParams = { stations: Vec[]; r: number; dwellS: number; skipCap: number };
 /** next: station to visit. since: when the cursor entered it (0 = not on it). */
 export type StationsProgress = { next: number; since: number; cancels: number };
+/** A started dwell survives drifting this far past the rim; beyond it the stop is cancelled. */
+export const STATION_SLACK = 1.5;
 
 export function makeStations(rand: Rand, sp: ModeSettings): { params: StationsParams; progress: StationsProgress } {
-  const stations = scatter(rand, Math.max(1, Math.round(sp.stations)), 3.5, 1.1).map(s => ({ x: s.x, y: s.y }));
-  return { params: { stations, r: sp.r, dwellS: sp.dwellS }, progress: { next: 0, since: 0, cancels: 0 } };
+  const stations = scatter(rand, Math.max(1, Math.round(sp.stations)), 3.5, 1.1, 2 * sp.r + 0.4).map(s => ({ x: s.x, y: s.y }));
+  return { params: { stations, r: sp.r, dwellS: sp.dwellS, skipCap: sp.skips }, progress: { next: 0, since: 0, cancels: 0 } };
 }
 
-/** One tick. Leaving before the dwell completes cancels that station. Returns the same `prog` when nothing changed. */
+/**
+ * One tick. Leaving before the dwell completes cancels that station (a strike).
+ * Jittering on the rim is forgiven: a started dwell only cancels once the cursor
+ * is clearly off the station (STATION_SLACK x r). Returns the same `prog` when
+ * nothing changed.
+ */
 export function stationsStep(p: StationsParams, prog: StationsProgress, nowMs: number, cur: Vec): { prog: StationsProgress; event: 'visit' | 'cancel' | null; won: boolean } {
   const st = p.stations[prog.next];
   if (!st) return { prog, event: null, won: true };
-  if (dist(cur, st) <= p.r) {
+  const d = dist(cur, st);
+  if (d <= p.r || (prog.since && d <= p.r * STATION_SLACK)) {
     if (!prog.since) return { prog: { ...prog, since: nowMs }, event: null, won: false };
     if (nowMs - prog.since >= p.dwellS * 1000) {
       const next = prog.next + 1;

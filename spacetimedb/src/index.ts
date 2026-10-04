@@ -43,6 +43,7 @@ import {
   makeRoomCode,
   makeStations,
   makeTargets,
+  targetsStep,
   makeValves,
   mazeHit,
   moleStep,
@@ -59,7 +60,6 @@ import {
   stageSeconds,
   stageSpec,
   stationsStep,
-  targetPos,
   tileAt,
   tileCenter,
   valvesStep,
@@ -470,10 +470,10 @@ function startLevel(ctx: Ctx, room: RoomRow, kind: PlayKind, stage = 1) {
   let secret: string | null = null;
   const secs = stageSeconds(kind, sp);
   if (kind === 'targets') {
-    params = makeTargets(rand, sp.n, sp.r, sp.move);
-    progress = { next: 0 } satisfies TargetsProgress;
+    params = makeTargets(rand, sp.n, sp.r, sp.move, sp.strikes);
+    progress = { next: 0, strikes: 0, on: -1 } satisfies TargetsProgress;
   } else if (kind === 'maze') {
-    params = makeMaze(rand, sp.cw, sp.ch);
+    params = makeMaze(rand, sp.cw, sp.ch, sp.bonks);
     progress = { hits: 0, frozenUntil: 0 } satisfies MazeProgress;
   } else if (kind === 'minesweeper') {
     const m = makeMines(rand, sp.cols, sp.rows, sp.mines, sp.autoMinS, sp.autoMaxS);
@@ -923,14 +923,17 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
     if (running.kind === 'targets') {
       const p = JSON.parse(running.params) as TargetsParams;
       const prog = JSON.parse(progress) as TargetsProgress;
-      const tg = prog.next < p.targets.length ? targetPos(p, prog.next, tPlay) : null;
-      if (tg && Math.hypot(body.x - tg.x, body.y - tg.y) <= p.r) {
-        prog.next += 1;
-        progress = JSON.stringify(prog);
-        emit('target', tg.x, tg.y);
-        log(ctx, room.id, 'target', '', { n: prog.next, of: p.targets.length });
-        if (prog.next >= p.targets.length) outcome = 'won';
+      const r = targetsStep(p, prog, tPlay, body);
+      if (r.prog !== prog) progress = JSON.stringify(r.prog);
+      if (r.event === 'hit' && r.at) {
+        emit('target', r.at.x, r.at.y);
+        log(ctx, room.id, 'target', '', { n: r.prog.next, of: p.targets.length });
+      } else if (r.event === 'zap' && r.at) {
+        emit('zap', r.at.x, r.at.y);
+        log(ctx, room.id, 'zap', '', { strikes: r.prog.strikes, of: p.strikeCap, wanted: r.prog.next + 1, hit: r.prog.on + 1 });
       }
+      if (r.won) outcome = 'won';
+      else if (r.prog.strikes >= p.strikeCap) outcome = 'lost';
     } else if (running.kind === 'maze') {
       const m = JSON.parse(running.params) as MazeParams;
       const prog = JSON.parse(progress) as MazeProgress;
@@ -943,8 +946,9 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
         prog.frozenUntil = tMs + 700;
         progress = JSON.stringify(prog);
         emit('wall', body.x, body.y);
-        log(ctx, room.id, 'wall', '', { hits: prog.hits });
+        log(ctx, room.id, 'wall', '', { hits: prog.hits, of: m.bonkCap });
         body = { x: s.x, y: s.y, vx: 0, vy: 0 };
+        if (prog.hits >= m.bonkCap) outcome = 'lost';
       } else {
         const tl = tileAt(m, body.x, body.y);
         if (tl.c === m.goal.c && tl.r === m.goal.r) outcome = 'won';
@@ -1015,9 +1019,10 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
       if (r.prog !== prog) progress = JSON.stringify(r.prog);
       if (r.event) {
         emit(r.event === 'key' ? 'key' : 'buzz', body.x, body.y, r.event === 'key' ? prog.onKey || r.prog.onKey : r.prog.onKey);
-        log(ctx, room.id, r.event, '', { typed: p.word.slice(0, r.prog.next), word: p.word });
+        log(ctx, room.id, r.event, '', { typed: p.word.slice(0, r.prog.next), word: p.word, typos: r.prog.buzzes, of: p.typoCap });
       }
       if (r.won) outcome = 'won';
+      else if (r.prog.buzzes >= p.typoCap) outcome = 'lost';
     } else if (running.kind === 'hunt') {
       const p = JSON.parse(running.params) as HuntParams;
       const prog = JSON.parse(progress) as HuntProgress;
@@ -1031,7 +1036,12 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
           emit('hunt_found', body.x, body.y);
           log(ctx, room.id, 'hunt_found', '', { found: r.prog.found.length, of: p.finds });
         } else if (r.event === 'reset') emit('hunt_reset', body.x, body.y);
+        else if (r.event === 'trap') {
+          emit('trap', body.x, body.y);
+          log(ctx, room.id, 'trap', '', { traps: r.prog.traps, of: p.trapCap });
+        }
         if (r.won) outcome = 'won';
+        else if (r.prog.traps >= p.trapCap) outcome = 'lost';
       }
     } else if (running.kind === 'valves') {
       const p = JSON.parse(running.params) as ValvesParams;
@@ -1053,9 +1063,10 @@ function tickRoom(ctx: Ctx, cfg: ReturnType<typeof getConfig>, room: RoomRow, pt
       if (r.event) {
         const st = p.stations[prog.next];
         emit(r.event === 'visit' ? 'station' : 'station_cancel', st.x, st.y);
-        log(ctx, room.id, r.event === 'visit' ? 'station' : 'station_cancel', '', { next: r.prog.next, of: p.stations.length });
+        log(ctx, room.id, r.event === 'visit' ? 'station' : 'station_cancel', '', { next: r.prog.next, of: p.stations.length, skips: r.prog.cancels, skipCap: p.skipCap });
       }
       if (r.won) outcome = 'won';
+      else if (r.prog.cancels >= p.skipCap) outcome = 'lost';
     }
     if (running.kind === 'vote') {
       if (timeUp) {

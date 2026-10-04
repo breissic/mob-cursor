@@ -93,6 +93,12 @@ export function startRenderer(
       case 'reveal':
         burst(row.x, row.y, 10);
         break;
+      case 'zap':
+        shake = 0.7;
+        flash = 0.5;
+        flashColor = '255,59,59';
+        add({ kind: 'text', life: 1.2, text: 'WRONG ONE!', color: '#ff3b3b', size: 0.8, vy: -0.8 });
+        break;
       case 'wall':
         shake = 0.7;
         flash = 0.6;
@@ -149,6 +155,13 @@ export function startRenderer(
       case 'hunt_reset':
         shake = 0.3;
         add({ kind: 'text', life: 0.9, text: 'SLIPPED!', color: '#ff5a36', size: 0.6, vy: -0.8 });
+        break;
+      case 'trap':
+        shake = 0.9;
+        flash = 0.6;
+        flashColor = '255,59,59';
+        for (let i = 0; i < 2; i++) burst(row.x, row.y, 24);
+        add({ kind: 'text', life: 1.4, text: 'TRAP! DECOY!', color: '#ff3b3b', size: 0.9, vy: -0.8 });
         break;
       // Valves.
       case 'valve_grab':

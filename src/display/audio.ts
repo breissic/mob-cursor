@@ -80,6 +80,12 @@ export function sfx(kind: string) {
       // Red = falling two-tone, green = rising.
       tone(880, 0.1, 'square', 0.08);
       return setTimeout(() => tone(660, 0.18, 'square', 0.08), 110);
+    case 'zap':
+      tone(1500, 0.05, 'square', 0.1, 300);
+      return tone(120, 0.25, 'sawtooth', 0.12, 60);
+    case 'trap':
+      tone(700, 0.08, 'square', 0.1, 200);
+      return setTimeout(() => tone(110, 0.4, 'sawtooth', 0.13, 45), 70);
     case 'fault':
     case 'no_chair':
       return tone(140, 0.3, 'sawtooth', 0.12, 60);

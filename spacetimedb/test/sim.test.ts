@@ -69,6 +69,8 @@ import {
   STAGES,
   stationsStep,
   targetPos,
+  targetsStep,
+  STATION_SLACK,
   unpackGhosts,
   valveLevelsNow,
   valvesStep,
@@ -231,7 +233,7 @@ test('pointer budget is per room: a full room gets a smaller per-client rate, an
 // Per-mode settings and stage hardening
 // ---------------------------------------------------------------------------
 
-test('every playable mode has settings with labels, a stage-1 default inside its range, and a stage of minutes not seconds', () => {
+test('every playable mode has settings with labels, a stage-1 default inside its range, and party-length stages', () => {
   for (const kind of LEVEL_ROTATION) {
     assert.ok(isPlayKind(kind));
     const defs = MODE_SETTINGS[kind];
@@ -243,7 +245,7 @@ test('every playable mode has settings with labels, a stage-1 default inside its
     }
     for (let stage = 1; stage <= STAGES; stage++) {
       const secs = stageSeconds(kind, stageSpec(kind, stage));
-      assert.ok(secs >= 120 && secs <= 400, `${kind} stage ${stage} lasts ${secs}s`);
+      assert.ok(secs >= 45 && secs <= 150, `${kind} stage ${stage} lasts ${secs}s`);
     }
   }
   assert.ok(!isPlayKind('vote') && !isPlayKind('lobby') && !isPlayKind(undefined));
@@ -263,18 +265,18 @@ test('saved settings overlay the defaults: unknown keys dropped, values clamped 
 
 test('stages 2 and 3 get harder on top of whatever stage 1 is set to', () => {
   const harder: Record<string, (a: Record<string, number>, b: Record<string, number>) => boolean> = {
-    targets: (a, b) => b.n > a.n && b.r < a.r,
-    maze: (a, b) => b.cw > a.cw && b.ch >= a.ch,
+    targets: (a, b) => b.n > a.n && b.r < a.r && b.strikes <= a.strikes,
+    maze: (a, b) => b.cw > a.cw && b.ch >= a.ch && b.bonks < a.bonks,
     minesweeper: (a, b) => b.mines > a.mines && b.autoMaxS < a.autoMaxS,
     redlight: (a, b) => b.leash < a.leash && b.greenMaxS < a.greenMaxS && b.rewind > a.rewind && b.faults <= a.faults && b.fakeP > a.fakeP,
     balloon: (a, b) => b.gravity > a.gravity && b.saves > a.saves,
     mole: (a, b) => b.holes > a.holes && b.upMs < a.upMs && b.target > a.target,
     potato: (a, b) => b.rounds > a.rounds && b.fuseS < a.fuseS && b.r < a.r && b.move > a.move,
     chairs: (a, b) => b.chairs > a.chairs && b.w < a.w && b.warnS < a.warnS,
-    keyboard: (a, b) => b.dwellMs < a.dwellMs,
-    hunt: (a, b) => b.finds > a.finds && b.radius < a.radius && b.dwellS > a.dwellS && b.decoys > a.decoys,
+    keyboard: (a, b) => b.dwellMs < a.dwellMs && b.typos < a.typos,
+    hunt: (a, b) => b.finds > a.finds && b.radius < a.radius && b.dwellS > a.dwellS && b.decoys > a.decoys && b.traps <= a.traps,
     valves: (a, b) => b.valves > a.valves && b.drift > a.drift && b.holdS > a.holdS,
-    stations: (a, b) => b.stations > a.stations && b.dwellS < a.dwellS,
+    stations: (a, b) => b.stations > a.stations && b.dwellS < a.dwellS && b.skips <= a.skips,
   };
   for (const kind of LEVEL_ROTATION) {
     const s1 = stageSpec(kind, 1);
@@ -303,7 +305,8 @@ test('maze: goal reachable from start at every stage size', () => {
   for (let s = 1; s < 12; s++)
     for (let stage = 1; stage <= 3; stage++) {
       const sp = stageSpec('maze', stage);
-      const m = makeMaze(seeded(s), sp.cw, sp.ch);
+      const m = makeMaze(seeded(s), sp.cw, sp.ch, sp.bonks);
+      assert.equal(m.bonkCap, sp.bonks);
       const seen = new Set<number>();
       const q = [m.start.r * m.cols + m.start.c];
       while (q.length) {
@@ -337,8 +340,44 @@ test('targets: every stage is a real trip (each target far from the previous one
         assert.ok(q.x >= 0.6 && q.x <= 15.4 && q.y >= 0.6 && q.y <= 8.4);
       }
   }
-  const p = { targets: [{ x: 1, y: 1, ph: 0 }], r: 0.5, move: 0 };
+  const p = { targets: [{ x: 1, y: 1, ph: 0 }], r: 0.5, move: 0, strikeCap: 3 };
   assert.deepEqual(targetPos(p, 0, 10), { x: 1, y: 1 });
+});
+
+test('targets: touching the wrong number is a strike (once per visit), targets never overlap, the right one hits', () => {
+  for (let stage = 1; stage <= 3; stage++) {
+    const sp = stageSpec('targets', stage);
+    const p = makeTargets(seeded(20 + stage), sp.n, sp.r, sp.move, sp.strikes);
+    assert.equal(p.strikeCap, sp.strikes);
+    for (let i = 0; i < p.targets.length; i++)
+      for (let j = i + 1; j < p.targets.length; j++)
+        assert.ok(Math.hypot(p.targets[i].x - p.targets[j].x, p.targets[i].y - p.targets[j].y) > 2 * p.r, 'no target hides under another');
+  }
+  const p = makeTargets(seeded(21), 5, 0.6, 0, 2);
+  const p0 = { next: 0, strikes: 0, on: -1 };
+  const nowhere = { x: -5, y: -5 };
+  assert.equal(targetsStep(p, p0, 0, nowhere).prog, p0, 'nothing touched: same object');
+  // Sit on #3 while #1 is wanted: one strike, and staying there does not stack.
+  let r = targetsStep(p, p0, 0, p.targets[2]);
+  assert.equal(r.event, 'zap');
+  assert.equal(r.prog.strikes, 1);
+  assert.equal(r.prog.on, 2);
+  assert.equal(targetsStep(p, r.prog, 0.1, p.targets[2]).prog, r.prog);
+  // Leave, come back: strikes again.
+  r = targetsStep(p, r.prog, 0.2, nowhere);
+  assert.equal(r.prog.on, -1);
+  r = targetsStep(p, r.prog, 0.3, p.targets[2]);
+  assert.equal(r.prog.strikes, 2);
+  // The right one still hits and clears the "on" marker.
+  r = targetsStep(p, r.prog, 0.4, p.targets[0]);
+  assert.equal(r.event, 'hit');
+  assert.equal(r.prog.next, 1);
+  assert.equal(r.prog.on, -1);
+  // Already-hit targets are harmless.
+  assert.equal(targetsStep(p, r.prog, 0.5, p.targets[0]).prog, r.prog);
+  // Last one wins.
+  const last = { next: 4, strikes: 0, on: -1 };
+  assert.ok(targetsStep(p, last, 1, p.targets[4]).won);
 });
 
 test('minesweeper: first click is safe, mines are conserved, winnable; the random-click gap comes from the settings', () => {
@@ -388,7 +427,7 @@ test('revealCell keeps extra progress fields (auto-click timer)', () => {
 // Red Light, Green Light (doll + leash)
 // ---------------------------------------------------------------------------
 
-test('redlight path: serpentine lanes below the light strip, long enough for minutes of walking', () => {
+test('redlight path: serpentine lanes below the light strip, a real walk but not a slog', () => {
   for (let lanes = 1; lanes <= 4; lanes++) {
     const path = redlightPath(lanes);
     assert.equal(path.length, lanes * 2);
@@ -400,9 +439,10 @@ test('redlight path: serpentine lanes below the light strip, long enough for min
     const mid = pathPos(path, len / 2);
     assert.ok(mid.x >= 1 && mid.x <= WORLD_W - 1);
   }
-  // With the stage-1 defaults the doll needs well over a minute of pure green walking.
+  // With the stage-1 defaults the doll needs a good half-minute of pure green walking (party length, not a slog).
   const sp = stageSpec('redlight', 1);
-  assert.ok(pathLength(redlightPath(sp.lanes)) / sp.speed > 60);
+  const walk = pathLength(redlightPath(sp.lanes)) / sp.speed;
+  assert.ok(walk > 30 && walk < sp.secs * 0.6, `pure walk ${walk}s fits a ${sp.secs}s stage`);
 });
 
 test('redlight: the doll walks only on green with the cursor inside the leash; red freezes her', () => {
@@ -507,12 +547,12 @@ test('redlight: fake-out greens die after FAKE_MS and never move the doll; a rea
 // Balloon, mole, potato, chairs, keyboard
 // ---------------------------------------------------------------------------
 
-test('balloon: a hand under the balloon saves it, the floor is a drop that respawns it; saves to win is long', () => {
+test('balloon: a hand under the balloon saves it, the floor is a drop that respawns it; saves to win is a run', () => {
   const sp = stageSpec('balloon', 1);
   const { params: p, progress: p0 } = makeBalloons(seeded(3), sp, 0);
   assert.equal(p0.balloons.length, 1);
   assert.equal(p.saveTarget, sp.saves);
-  assert.ok(p.saveTarget >= 30, 'a stage is dozens of bops');
+  assert.ok(p.saveTarget >= 15, 'a stage is a good run of bops');
   const idle = balloonStep(p, p0, 100, { x: 0.5, y: 8.5 }, seeded(4));
   assert.equal(idle.prog, p0);
   const b = balloonsNow(p, p0, 1000)[0];
@@ -533,11 +573,11 @@ test('balloon: a hand under the balloon saves it, the floor is a drop that respa
   assert.ok(s3.params.wind > 0 && sp.wind === 0);
 });
 
-test('mole: scoring, missing, no repeat hole; a stage needs dozens of whacks', () => {
+test('mole: scoring, missing, no repeat hole; a stage needs a run of whacks', () => {
   const sp = stageSpec('mole', 1);
   const { params: p, progress: p0 } = makeMoles(sp, 0);
   assert.equal(p.holes.length, sp.holes);
-  assert.ok(p.target >= 30);
+  assert.ok(p.target >= 10);
   assert.equal(p0.up, -1);
   assert.equal(moleStep(p, p0, p0.until - 1, { x: 0, y: 0 }, seeded(6)).prog, p0);
   const up = moleStep(p, p0, p0.until, { x: 0, y: 0 }, seeded(6));
@@ -596,9 +636,9 @@ test('potato: a chain of deliveries; in the bucket at the fuse moves to the next
     }
 });
 
-test('chairs: ring of non-overlapping chairs, one goes per round, last chair wins; stage 1 has many rounds', () => {
+test('chairs: ring of non-overlapping chairs, one goes per round, last chair wins; stage 1 has several rounds', () => {
   const sp = stageSpec('chairs', 1);
-  assert.ok(sp.chairs >= 8);
+  assert.ok(sp.chairs >= 5);
   const { params: p, progress: p0 } = makeChairs(seeded(9), sp, 0);
   assert.equal(p.chairs.length, sp.chairs);
   for (const c of p.chairs) assert.ok(c.x >= 0 && c.x + c.w <= WORLD_W && c.y >= 0 && c.y + c.h <= WORLD_H, JSON.stringify(c));
@@ -628,6 +668,8 @@ test('chairs: ring of non-overlapping chairs, one goes per round, last chair win
 test('keyboard: phrases per stage, spaces are free, dwell types, wrong key buzzes once', () => {
   const sp = stageSpec('keyboard', 1);
   const { params: p, progress: p0 } = makeKeyboard(seeded(10), sp, 1);
+  assert.equal(p.typoCap, sp.typos);
+  assert.ok(p.typoCap >= 1, 'typos are a strike, not free');
   assert.ok(KEYBOARD_PHRASES[0].includes(p.word));
   assert.ok(p.word.length >= 18, 'a phrase, not a word');
   assert.equal(p.keys.length, 26);
@@ -739,6 +781,37 @@ test('hunt: the target is secret, the meter is warmer/colder with noise, dwellin
   for (const d of h3.secret.decoys) assert.ok(huntHeat(h3.params, { ...h3.secret, target: { x: -50, y: -50 } }, d) < 0.8, 'a decoy is warm, never hot');
 });
 
+test('hunt: decoys are traps — sitting on one for the dwell springs it, reveals it, and a fresh decoy appears', () => {
+  const sp = stageSpec('hunt', 1);
+  assert.ok(sp.decoys >= 1 && sp.traps >= 1, 'stage 1 already has teeth');
+  const { params: p, progress: p0, secret } = makeHunt(seeded(31), sp, 1000);
+  assert.equal(p.trapCap, sp.traps);
+  assert.equal(secret.decoys.length, sp.decoys);
+  const noiseless = { ...p, noise: 0 };
+  const d = secret.decoys[0];
+  assert.ok(huntHeat(p, secret, d) < 0.8, 'a decoy never reads boiling');
+  let r = huntStep(noiseless, p0, secret, 2000, d, seeded(1));
+  assert.equal(r.prog.trapSince, 2000);
+  assert.equal(r.prog.dwellSince, 0, 'a decoy is not the treasure');
+  r = huntStep(noiseless, r.prog, secret, 2000 + p.dwellS * 1000 - 1, d, seeded(1));
+  assert.equal(r.event, null);
+  r = huntStep(noiseless, r.prog, secret, 2000 + p.dwellS * 1000, d, seeded(1));
+  assert.equal(r.event, 'trap');
+  assert.equal(r.prog.traps, 1);
+  assert.equal(r.prog.trapSince, 0);
+  assert.equal(r.prog.sprung.length, 1);
+  assert.ok(Math.hypot(r.prog.sprung[0].x - d.x, r.prog.sprung[0].y - d.y) < 0.02);
+  assert.equal(r.secret.decoys.length, sp.decoys, 'sprung decoy is replaced');
+  assert.ok(r.secret.decoys.every(q => Math.hypot(q.x - d.x, q.y - d.y) > 0.02), 'the sprung one is gone from the secret');
+  assert.deepEqual(r.secret.target, secret.target, 'the treasure did not move');
+  // Stepping off a decoy early just clears the timer, no strike.
+  r = huntStep(noiseless, p0, secret, 3000, d, seeded(1));
+  r = huntStep(noiseless, r.prog, secret, 3100, { x: d.x < 8 ? 15.5 : 0.5, y: d.y < 4.5 ? 8.5 : 0.5 }, seeded(1));
+  assert.equal(r.prog.trapSince, 0);
+  assert.equal(r.prog.traps, 0);
+  assert.notEqual(r.event, 'trap');
+});
+
 test('valves: unheld valves drift down, the held one fills; blowouts count; all-in-zone for the hold wins and slipping resets the hold', () => {
   const sp = stageSpec('valves', 1);
   const { params: p, progress: p0 } = makeValves(seeded(13), sp, 1000);
@@ -786,7 +859,7 @@ test('stations: visit in order, dwell per station, leaving early cancels that st
   const sp = stageSpec('stations', 1);
   const { params: p, progress: p0 } = makeStations(seeded(14), sp);
   assert.equal(p.stations.length, sp.stations);
-  assert.ok(sp.stations >= 10);
+  assert.ok(sp.stations >= 6);
   let prev = { x: WORLD_W / 2, y: WORLD_H / 2 };
   for (const s of p.stations) {
     assert.ok(Math.hypot(s.x - prev.x, s.y - prev.y) > 2.5, 'each station is a trip');
@@ -800,8 +873,13 @@ test('stations: visit in order, dwell per station, leaving early cancels that st
   assert.equal(r.prog.since, 1000);
   r = stationsStep(p, r.prog, 1000 + p.dwellS * 1000 - 1, s0);
   assert.equal(r.event, null);
+  // Jittering just past the rim keeps the dwell alive; clearly leaving cancels it.
+  const rim = { x: s0.x + p.r * (STATION_SLACK - 0.05), y: s0.y };
+  assert.equal(stationsStep(p, r.prog, 1400, rim).prog, r.prog);
+  assert.equal(p.skipCap, sp.skips);
   const cancel = stationsStep(p, r.prog, 1500, { x: 0.1, y: 0.1 });
   assert.equal(cancel.event, 'cancel');
+  assert.equal(cancel.prog.cancels, 1);
   assert.equal(cancel.prog.since, 0);
   assert.equal(cancel.prog.next, 0);
   r = stationsStep(p, r.prog, 1000 + p.dwellS * 1000, s0);
